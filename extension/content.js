@@ -2960,9 +2960,7 @@ Return ONLY a JSON object (no markdown, no code fences):
       .kn-backdrop {
         position: fixed;
         inset: 0;
-        background: rgba(0, 0, 0, 0.65);
-        backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
+        background: transparent;
         animation: kn-fade-in 0.15s ease-out;
       }
 
