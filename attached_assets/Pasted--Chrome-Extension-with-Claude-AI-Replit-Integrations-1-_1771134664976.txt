@@ -1,0 +1,973 @@
+## Chrome Extension with Claude AI + Replit Integrations
+
+---
+
+## 1. Product Overview
+
+**Keynection** is a Chrome extension that provides a keyboard-activated overlay for executing AI-powered actions based on browser context. Press `Cmd+K`, and Claude AI understands what you're viewing to instantly create emails, tasks, documents, and more—across 11 integrated platforms.
+
+### Connected Integrations (Active):
+
+✅ Discord | ✅ GitHub | ✅ Gmail | ✅ Google Calendar | ✅ Google Docs
+
+✅ Google Drive | ✅ Google Sheets | ✅ Linear | ✅ Notion | ✅ OneDrive | ✅ Outlook
+
+---
+
+## 2. Tech Stack
+
+- **Platform**: Chrome Extension (Manifest V3)
+- **Frontend**: React 18 + TypeScript + Tailwind CSS
+- **Build**: Vite
+- **AI**: Claude 3.5 Sonnet (Anthropic)
+- **Integrations**: Replit native connectors (no OAuth setup needed!)
+
+---
+
+## 3. Smart Actions (Priority Order)
+
+### 🔥 PHASE 1: Core Actions (Week 1-2)
+
+### 1. Email This Page/Quote (Gmail/Outlook)
+
+**Trigger:** Article page OR text selected
+
+**Flow:**
+
+1. User on TechCrunch article → Press `Cmd+K`
+2. "Email This Page ✨" appears first
+3. Claude reads article → generates subject + body
+4. Form pre-fills → User adds recipient → Send via Gmail
+
+**Claude Prompt:**
+
+```
+Generate a professional email from this content:
+
+Title: {pageTitle}
+URL: {pageUrl}
+Content: {mainContent}
+Selected: {selectedText || 'N/A'}
+
+Requirements:
+- Subject: Clear, max 60 chars
+- Body: 100-150 words, professional tone
+- Include source URL
+- If text selected, format as quote
+
+Return JSON: {"subject": "...", "body": "..."}
+```
+
+**Replit API:** `Gmail.send()` or `Outlook.send()`
+
+---
+
+### 2. Save to Notion (Notion)
+
+**Trigger:** Article page
+
+**Flow:**
+
+1. On article → "Save to Notion ✨"
+2. Claude structures content:
+    - Title
+    - Summary (3-5 bullets)
+    - Key points
+    - Source link
+3. Creates page in Notion database
+
+**Claude Prompt:**
+
+```
+Structure this article for Notion:
+
+Title: {pageTitle}
+Content: {mainContent}
+
+Create:
+- Title (clear, concise)
+- Summary (3-5 bullet points)
+- Key Points (important takeaways)
+- Tags (3-5 relevant tags)
+
+Return JSON: {
+  "title": "...",
+  "summary": ["...", "..."],
+  "keyPoints": ["...", "..."],
+  "tags": ["...", "..."]
+}
+```
+
+**Replit API:** `Notion.createPage()`
+
+---
+
+### 3. Extract Tasks → Linear/Notion (Linear + Notion)
+
+**Trigger:** Selected text with task keywords
+
+**Flow:**
+
+1. Select meeting notes → "Extract Tasks ✨"
+2. Claude identifies action items with:
+    - Task description
+    - Assignee (if mentioned)
+    - Due date (if mentioned)
+    - Priority (high/medium/low)
+3. User reviews (can uncheck)
+4. Choose: Create in Linear OR Notion
+
+**Claude Prompt:**
+
+```
+Extract action items from:
+
+{selectedText}
+
+For each task:
+- Description (clear, actionable)
+- Assignee (name or "Unassigned")
+- Due date (YYYY-MM-DD or null)
+- Priority (high/medium/low based on urgency)
+
+Return JSON array: [
+  {
+    "task": "...",
+    "assignee": "...",
+    "dueDate": "...",
+    "priority": "..."
+  }
+]
+```
+
+**Replit API:** `Linear.createIssue()` or `Notion.createPage()`
+
+---
+
+### 4. Automated Standup (GitHub + Notion + Google Calendar)
+
+**Trigger:** "Generate Standup Update ✨"
+
+**Flow:**
+
+1. User clicks "Generate Standup"
+2. System fetches:
+    - **GitHub**: Commits (last 24h)
+    - **Notion**: Completed tasks
+    - **Google Calendar**: Meetings attended
+3. User reviews activities (checkboxes to include/exclude)
+4. Optional: Add blockers
+5. Claude generates formatted standup
+6. Post to Discord or copy to clipboard
+
+**Data Collection:**
+
+```tsx
+// GitHub
+const commits = await GitHub.getUserEvents(username, { since: '24h' });
+const pushEvents = commits.filter(e => e.type === 'PushEvent');
+
+// Notion
+const tasks = await Notion.search({
+  filter: { last_edited_time: { past_day: {} } }
+});
+
+// Google Calendar
+const meetings = await GoogleCalendar.listEvents({
+  timeMin: '24h ago',
+  timeMax: 'now',
+  minAttendees: 2
+});
+```
+
+**Claude Prompt:**
+
+```
+Generate Slack-style standup from:
+
+GitHub Commits:
+{commits.map(c => `- ${c.message} (${c.repo})`).join('\\n')}
+
+Notion Tasks:
+{tasks.map(t => `- ${t.title}`).join('\\n')}
+
+Meetings:
+{meetings.map(m => `- ${m.summary} (${m.duration}min)`).join('\\n')}
+
+Blockers: {blockers || 'None'}
+
+Format:
+*Yesterday* 🗓️
+- Accomplishments (group similar commits)
+
+*Today* 📋
+- Next steps (infer from yesterday)
+
+*Meetings* 🤝
+- Concise list
+
+*Blockers* 🚧
+- If any
+
+Use markdown, under 250 words.
+```
+
+**Output:** Post to Discord or copy to clipboard
+
+---
+
+### 🎯 PHASE 2: Power Actions (Week 3-4)
+
+### 5. Smart Email Reply (Gmail/Outlook)
+
+**Trigger:** On Gmail/Outlook email thread
+
+**Flow:**
+
+1. Reading email → "Generate Reply ✨"
+2. Claude analyzes email context
+3. Generates 3 reply options:
+    - **Professional**: Formal, detailed
+    - **Friendly**: Warm, conversational
+    - **Brief**: Quick acknowledgment
+4. User picks one → edits if needed → sends
+
+**Claude Prompt:**
+
+```
+Analyze this email and generate 3 reply options:
+
+From: {sender}
+Subject: {subject}
+Body: {body}
+
+Generate:
+1. Professional: Formal, comprehensive response
+2. Friendly: Warm, personable tone
+3. Brief: Quick, to-the-point reply
+
+All replies should:
+- Address key points/questions
+- Maintain appropriate tone
+- Be 50-150 words each
+
+Return JSON: {
+  "professional": "...",
+  "friendly": "...",
+  "brief": "..."
+}
+```
+
+**Replit API:** `Gmail.reply()` or `Outlook.reply()`
+
+---
+
+### 6. Create Linear Issue from Bug (Linear)
+
+**Trigger:** On error page OR selected error text
+
+**Flow:**
+
+1. On error page → "Report Bug to Linear ✨"
+2. Captures:
+    - Error message
+    - URL
+    - Browser/OS info
+    - Screenshot (optional)
+3. Claude structures bug report
+4. Creates Linear issue with label "bug"
+
+**Claude Prompt:**
+
+```
+Create a Linear bug report:
+
+Error: {errorText}
+URL: {pageUrl}
+Browser: {navigator.userAgent}
+
+Generate structured report:
+- Title: Clear, descriptive (max 80 chars)
+- Description:
+  * Steps to reproduce
+  * Expected behavior
+  * Actual behavior
+- Severity: high/medium/low
+- Labels: ["bug", other relevant labels]
+
+Return JSON: {
+  "title": "...",
+  "description": "...",
+  "severity": "...",
+  "labels": [...]
+}
+```
+
+**Replit API:** `Linear.createIssue()`
+
+---
+
+### 7. Save to Google Docs (Google Docs)
+
+**Trigger:** Article page
+
+**Flow:**
+
+1. On article → "Save to Google Docs ✨"
+2. Claude formats for Docs:
+    - Title (Heading 1)
+    - Summary (italic)
+    - Main content (properly structured)
+    - Source link (hyperlinked)
+3. Creates new Google Doc
+4. Opens in new tab
+
+**Claude Prompt:**
+
+```
+Format this article for Google Docs:
+
+Title: {pageTitle}
+Content: {mainContent}
+
+Create structured document:
+- Title (clear, engaging)
+- Summary (2-3 sentences)
+- Key sections with headers
+- Bullet points for lists
+- Source: {pageUrl}
+
+Return JSON: {
+  "title": "...",
+  "summary": "...",
+  "sections": [
+    {"heading": "...", "content": "..."},
+    ...
+  ]
+}
+```
+
+**Replit API:** `GoogleDocs.create()`
+
+---
+
+### 8. Schedule Meeting from Context (Google Calendar/Outlook)
+
+**Trigger:** On email thread or selected text mentioning meeting
+
+**Flow:**
+
+1. Select text: "Let's meet next Tuesday at 2pm to discuss Q4 planning"
+2. "Schedule Meeting ✨"
+3. Claude extracts:
+    - Participants (from email thread or mentions)
+    - Topic/title
+    - Date/time
+    - Duration (inferred or default 30 min)
+4. Creates calendar invite
+5. Sends to participants
+
+**Claude Prompt:**
+
+```
+Extract meeting details from:
+
+Text: {selectedText}
+Context: {emailThread || pageContext}
+
+Extract:
+- Title: Meeting topic/purpose
+- Participants: Email addresses mentioned
+- Date/Time: Parse "next Tuesday at 2pm" to ISO format
+- Duration: Infer or default 30 min
+- Description: Brief agenda
+
+Return JSON: {
+  "title": "...",
+  "participants": ["email@example.com"],
+  "dateTime": "2024-03-19T14:00:00",
+  "duration": 30,
+  "description": "..."
+}
+```
+
+**Replit API:** `GoogleCalendar.createEvent()` or `Outlook.createEvent()`
+
+---
+
+### 9. Share to Discord (Discord)
+
+**Trigger:** Article page or selected text
+
+**Flow:**
+
+1. On article → "Share to Discord ✨"
+2. Claude adapts content for Discord:
+    - Casual tone
+    - Relevant emojis
+    - Formatted with markdown
+    - Mentions (if applicable)
+3. User selects server + channel
+4. Posts to Discord
+
+**Claude Prompt:**
+
+```
+Adapt this content for Discord:
+
+Title: {pageTitle}
+Content: {mainContent}
+URL: {pageUrl}
+
+Create Discord message:
+- Casual, conversational tone
+- 2-3 relevant emojis
+- Discord markdown (** bold **, * italic *)
+- 2-4 bullet points for key points
+- Include source link
+- Under 200 words
+
+Return JSON: {
+  "message": "...",
+  "suggestedChannel": "general|dev|announcements"
+}
+```
+
+**Replit API:** `Discord.sendMessage()`
+
+---
+
+### 10. Log to Google Sheets (Google Sheets)
+
+**Trigger:** "Log to Sheet ✨" (manual trigger or from forms)
+
+**Flow:**
+
+1. Extract structured data from page
+2. Claude identifies: fields, values
+3. User selects spreadsheet + sheet
+4. Appends row with timestamp
+
+**Example Use Cases:**
+
+- Expense tracking (scrape receipt data)
+- Lead capture (from website forms)
+- Content tracker (articles read, videos watched)
+- Research notes
+
+**Claude Prompt:**
+
+```
+Extract structured data from:
+
+Content: {pageContent or selectedText}
+Purpose: {userIntent}
+
+Identify:
+- Fields (column names)
+- Values (data to log)
+- Timestamp
+
+Return JSON: {
+  "fields": ["Date", "Title", "URL", "Notes"],
+  "values": ["2024-03-15", "...", "...", "..."]
+}
+```
+
+**Replit API:** `GoogleSheets.appendRow()`
+
+---
+
+### 💡 PHASE 3: Bonus Actions (Week 5+)
+
+### 11. Create GitHub Issue/PR Comment (GitHub)
+
+**Trigger:** On GitHub issue or PR page
+
+**Flow:**
+
+1. Reading GitHub issue → "Smart Comment ✨"
+2. Claude analyzes issue/PR context
+3. Generates helpful comment:
+    - Code review feedback
+    - Suggestions
+    - Links to docs
+4. User edits → posts
+
+**Replit API:** `GitHub.createComment()`
+
+---
+
+### 12. Save to Google Drive (Google Drive)
+
+**Trigger:** On PDF, image, document page
+
+**Flow:**
+
+1. On PDF page → "Save to Drive ✨"
+2. Downloads file
+3. Uploads to Google Drive folder
+4. Generates shareable link
+
+**Replit API:** `GoogleDrive.upload()`
+
+---
+
+### 13. Backup to OneDrive (OneDrive)
+
+**Trigger:** Similar to Google Drive
+
+**Flow:**
+
+1. Save files to OneDrive
+2. Organize in folders
+3. Share with team
+
+**Replit API:** `OneDrive.upload()`
+
+---
+
+## 4. System Architecture
+
+### File Structure
+
+```
+keynection/
+├── manifest.json
+├── public/
+│   └── icons/
+├── src/
+│   ├── background/
+│   │   └── service-worker.ts
+│   ├── content/
+│   │   ├── content-script.tsx
+│   │   └── overlay/
+│   │       ├── Overlay.tsx
+│   │       ├── CommandPalette.tsx
+│   │       └── forms/
+│   │           ├── EmailForm.tsx
+│   │           ├── NotionForm.tsx
+│   │           ├── TasksForm.tsx
+│   │           ├── StandupForm.tsx
+│   │           ├── LinearIssueForm.tsx
+│   │           ├── GoogleDocsForm.tsx
+│   │           ├── CalendarForm.tsx
+│   │           ├── DiscordForm.tsx
+│   │           └── SheetsForm.tsx
+│   ├── lib/
+│   │   ├── ai/
+│   │   │   ├── claude-client.ts
+│   │   │   └── prompts.ts
+│   │   ├── integrations/
+│   │   │   ├── gmail.ts
+│   │   │   ├── notion.ts
+│   │   │   ├── github.ts
+│   │   │   ├── calendar.ts
+│   │   │   ├── linear.ts
+│   │   │   ├── discord.ts
+│   │   │   ├── google-docs.ts
+│   │   │   ├── google-sheets.ts
+│   │   │   └── outlook.ts
+│   │   ├── context-detector.ts
+│   │   └── storage.ts
+│   └── styles/
+│       └── globals.css
+└── package.json
+```
+
+---
+
+## 5. Context Detection Logic
+
+### What to Detect:
+
+```tsx
+interface PageContext {
+  // Selection
+  hasSelection: boolean;
+  selectedText: string;
+
+  // Page info
+  pageTitle: string;
+  pageUrl: string;
+  pageType: 'article' | 'github' | 'gmail' | 'general';
+
+  // Content
+  isArticle: boolean;
+  wordCount: number;
+  mainContent: string; // First 3000 chars
+}
+```
+
+### Detection Rules:
+
+```tsx
+// Text selection
+hasSelection = window.getSelection().toString().length > 10;
+
+// Article detection
+isArticle =
+  wordCount > 300 &&
+  (document.querySelector('article') ||
+   document.querySelector('[property="og:type"][content="article"]'));
+
+// Page type
+if (url.includes('github.com')) pageType = 'github';
+if (url.includes('mail.google.com')) pageType = 'gmail';
+```
+
+### Action Suggestions Based on Context:
+
+```tsx
+// Article page + no selection
+→ Show: Email This Page, Save to Notion, Save to Google Docs
+
+// Text selected + task keywords
+→ Show: Extract Tasks (Linear/Notion)
+
+// GitHub issue page
+→ Show: Create Linear Issue, Smart Comment
+
+// Gmail thread
+→ Show: Smart Reply, Schedule Meeting
+
+// Always available
+→ Show: Generate Standup, Log to Sheets
+```
+
+---
+
+## 6. Replit Integration Implementation
+
+### Using Replit Connectors:
+
+```tsx
+// Example: Send Gmail
+import { gmail } from '@replit/integrations';
+
+async function sendEmail(to: string, subject: string, body: string) {
+  await gmail.send({
+    to,
+    subject,
+    body,
+    from: 'me' // Uses authenticated user
+  });
+}
+```
+
+### Available Replit APIs:
+
+```tsx
+// Gmail
+gmail.send(), gmail.list(), gmail.get(), gmail.reply()
+
+// Outlook
+outlook.send(), outlook.list(), outlook.createEvent()
+
+// Notion
+notion.createPage(), notion.search(), notion.updatePage()
+
+// Linear
+linear.createIssue(), linear.listIssues(), linear.updateIssue()
+
+// GitHub
+github.createIssue(), github.createComment(), github.getUser()
+
+// Google Calendar
+googleCalendar.createEvent(), googleCalendar.listEvents()
+
+// Google Docs
+googleDocs.create(), googleDocs.update()
+
+// Google Sheets
+googleSheets.appendRow(), googleSheets.read()
+
+// Google Drive
+googleDrive.upload(), googleDrive.list()
+
+// Discord
+discord.sendMessage(), discord.listServers()
+
+// OneDrive
+onedrive.upload(), onedrive.list()
+```
+
+**Advantage:** No OAuth setup, no token management! Replit handles everything.
+
+---
+
+## 7. Claude Integration
+
+### Setup:
+
+```tsx
+import Anthropic from '@anthropic-ai/sdk';
+
+const anthropic = new Anthropic({
+  apiKey: process.env.CLAUDE_API_KEY
+});
+
+async function generateContent(prompt: string): Promise<string> {
+  const message = await anthropic.messages.create({
+    model: 'claude-3-5-sonnet-20241022',
+    max_tokens: 1024,
+    messages: [{
+      role: 'user',
+      content: prompt
+    }]
+  });
+
+  return message.content[0].text;
+}
+```
+
+### JSON Parsing:
+
+```tsx
+function parseClaudeResponse(response: string): any {
+  // Remove markdown code fences if present
+  const cleaned = response
+    .replace(/```json\\n?/g, '')
+    .replace(/\\n?```/g, '')
+    .trim();
+
+  try {
+    return JSON.parse(cleaned);
+  } catch (error) {
+    // Fallback: try to extract JSON from text
+    const jsonMatch = cleaned.match(/\\{[\\s\\S]*\\}/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0]);
+    }
+    throw new Error('Failed to parse Claude response');
+  }
+}
+```
+
+---
+
+## 8. UI Design System
+
+### Colors:
+
+```css
+--bg-dark: #1a1a1a;
+--bg-medium: #2a2a2a;
+--text-primary: #ffffff;
+--text-secondary: #a0a0a0;
+--accent: #3b82f6;
+--success: #10b981;
+--error: #ef4444;
+--border: rgba(255, 255, 255, 0.1);
+```
+
+### Key Components:
+
+**Overlay:**
+
+```tsx
+<div className="fixed inset-0 z-[2147483647] bg-black/60 backdrop-blur-sm animate-fadeIn">
+  <div className="w-[600px] max-h-[80vh] bg-[#1a1a1a] rounded-xl shadow-2xl">
+    {children}
+  </div>
+</div>
+```
+
+**Command Item:**
+
+```tsx
+<button className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/5 rounded-lg transition-colors">
+  <div className="w-6 h-6">{icon}</div>
+  <div className="flex-1 text-left">
+    <div className="text-sm font-medium text-white">{name}</div>
+    <div className="text-xs text-gray-400">{description}</div>
+  </div>
+  {badge && <span className="text-sm">{badge}</span>}
+</button>
+```
+
+**Loading State:**
+
+```tsx
+<div className="flex flex-col items-center p-12">
+  <div className="text-lg font-medium mb-6">✨ {title}</div>
+  <div className="space-y-3">
+    {steps.map((step, i) => (
+      <div className={`flex items-center gap-3 ${
+        i === current ? 'text-blue-400' :
+        i < current ? 'text-green-400' : 'text-gray-500'
+      }`}>
+        <span>{i < current ? '✅' : i === current ? '⚡' : '○'}</span>
+        {step}
+      </div>
+    ))}
+  </div>
+  <div className="mt-6 w-10 h-10 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+</div>
+```
+
+---
+
+## 9. Implementation Plan
+
+### Week 1: Foundation
+
+- [ ]  Set up Vite + React + TypeScript
+- [ ]  Build overlay injection system
+- [ ]  Keyboard shortcut (`Cmd+K`)
+- [ ]  Command palette with search
+- [ ]  Arrow key navigation
+- [ ]  Context detection
+
+### Week 2: Core Actions (Gmail, Notion)
+
+- [ ]  Claude API client
+- [ ]  Email This Page (Gmail)
+- [ ]  Save to Notion
+- [ ]  Extract Tasks (Notion)
+- [ ]  Loading states + error handling
+
+### Week 3: Multi-Source Standup
+
+- [ ]  GitHub events fetching
+- [ ]  Google Calendar events
+- [ ]  Standup generation flow
+- [ ]  Activity review UI
+- [ ]  Output to Discord
+
+### Week 4: Power Actions
+
+- [ ]  Smart Email Reply (Gmail/Outlook)
+- [ ]  Create Linear Issue
+- [ ]  Save to Google Docs
+- [ ]  Schedule Meeting (Calendar)
+- [ ]  Share to Discord
+
+### Week 5: Polish
+
+- [ ]  Log to Google Sheets
+- [ ]  GitHub comments
+- [ ]  Google Drive/OneDrive upload
+- [ ]  Final testing
+- [ ]  Demo video
+
+---
+
+## 10. Testing Checklist
+
+### Must Work:
+
+- [ ]  Overlay opens on any webpage (Cmd+K)
+- [ ]  Detects articles accurately (90%+)
+- [ ]  Claude generates quality content (test 20+ times per action)
+- [ ]  Gmail sends successfully
+- [ ]  Notion pages created properly
+- [ ]  Linear issues created with correct fields
+- [ ]  Standup fetches from all 3 sources
+- [ ]  Discord messages post correctly
+- [ ]  Google Docs/Sheets work
+- [ ]  All loading states show progress
+- [ ]  Errors display helpful messages
+- [ ]  Works on Mac + Windows
+
+### Test Sites:
+
+- TechCrunch, Medium, personal blogs (articles)
+- GitHub issues/PRs
+- Gmail inbox
+- Google Calendar
+- Notion pages
+
+---
+
+## 11. Success Criteria
+
+**MVP is DONE when:**
+
+✅ User presses Cmd+K on any page → overlay appears
+✅ Relevant smart actions show based on context
+✅ Email This Page works end-to-end (article → email sent)
+✅ Save to Notion creates structured page
+✅ Extract Tasks finds action items → creates in Linear or Notion
+✅ Automated Standup pulls from GitHub + Notion + Calendar
+✅ Smart Email Reply generates 3 options
+✅ Create Linear Issue from error page
+✅ All Replit integrations work (Gmail, Notion, Linear, etc.)
+✅ All AI responses are editable before submission
+✅ Loading states are clear and informative
+✅ No console errors on major websites
+
+---
+
+## 12. Key Advantages
+
+### Why This Approach Wins:
+
+**1. Replit Integrations = Zero Auth Pain**
+
+- No OAuth setup
+- No token management
+- No rate limit headaches
+- Just use `gmail.send()` and it works
+
+**2. Claude = Quality AI**
+
+- Best-in-class reasoning
+- Structured JSON output
+- Handles complex prompts
+- Reliable parsing
+
+**3. Browser Context = Magic**
+
+- Knows what you're viewing
+- Suggests relevant actions
+- No manual data entry
+- Feels intelligent
+
+**4. Keyboard-First = Speed**
+
+- Cmd+K → action → done
+- No mouse needed
+- 90%+ time savings
+- Flow state maintained
+
+---
+
+## 13. Next Steps for Replit Agent
+
+### Start Building:
+
+1. **Set up project**:
+    
+    ```bash
+    npm create vite@latest keynection -- --template react-ts
+    cd keynection
+    npm install
+    npm install @anthropic-ai/sdk tailwindcss
+    ```
+    
+2. **Create manifest.json**:
+    - Manifest V3
+    - Permissions: `storage`, `activeTab`
+    - Content script injection
+3. **Build overlay**:
+    - React component
+    - Keyboard listener
+    - Command palette
+4. **Connect Claude**:
+    - API client
+    - Prompt templates
+    - JSON parsing
+5. **Add Replit integrations**:
+    - Gmail, Notion, Linear, etc.
+    - Test each one
+6. **Build forms one by one**:
+    - Email → Notion → Tasks → Standup → etc.
+7. **Test extensively**
+8. **Ship it!** 🚀
+
+---
+
+**END OF PRD**
+
+*This document contains everything Replit Agent needs to build Keynection with active Replit integrations. Build incrementally, test continuously, ship fast.*
