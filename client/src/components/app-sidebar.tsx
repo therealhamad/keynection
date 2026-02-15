@@ -11,7 +11,7 @@ import {
   SidebarHeader,
   SidebarFooter,
 } from "@/components/ui/sidebar";
-import { Command, LayoutDashboard, Puzzle, History, Settings, Sparkles, Keyboard } from "lucide-react";
+import { Command, LayoutDashboard, Puzzle, History, Settings, Sparkles, Keyboard, Chrome } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
 const navItems = [
@@ -19,6 +19,7 @@ const navItems = [
   { title: "Actions", url: "/actions", icon: Sparkles },
   { title: "Integrations", url: "/integrations", icon: Puzzle },
   { title: "History", url: "/history", icon: History },
+  { title: "Extension", url: "/extension", icon: Chrome },
 ];
 
 export function AppSidebar() {

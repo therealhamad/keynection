@@ -15,6 +15,7 @@ import Dashboard from "@/pages/dashboard";
 import ActionsPage from "@/pages/actions";
 import IntegrationsPage from "@/pages/integrations";
 import HistoryPage from "@/pages/history";
+import ExtensionPage from "@/pages/extension";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -24,6 +25,7 @@ function Router() {
       <Route path="/actions" component={ActionsPage} />
       <Route path="/integrations" component={IntegrationsPage} />
       <Route path="/history" component={HistoryPage} />
+      <Route path="/extension" component={ExtensionPage} />
       <Route component={NotFound} />
     </Switch>
   );

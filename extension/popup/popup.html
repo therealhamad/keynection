@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Keynection</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 360px;
+      min-height: 420px;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: linear-gradient(180deg, #1a1a2e 0%, #16162a 100%);
+      color: #e4e4e7;
+      -webkit-font-smoothing: antialiased;
+    }
+    .popup-header {
+      padding: 20px 20px 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .popup-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 4px;
+    }
+    .popup-logo {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #7c3aed, #6d28d9);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-weight: 700;
+      font-size: 14px;
+    }
+    .popup-title {
+      font-size: 18px;
+      font-weight: 700;
+      color: #f4f4f5;
+    }
+    .popup-subtitle {
+      font-size: 12px;
+      color: rgba(255,255,255,0.4);
+      margin-top: 4px;
+    }
+    .popup-shortcut {
+      margin-top: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: rgba(255,255,255,0.5);
+    }
+    .kbd {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 22px;
+      height: 22px;
+      padding: 0 6px;
+      border-radius: 5px;
+      font-size: 11px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.12);
+      color: rgba(255,255,255,0.6);
+    }
+    .popup-section {
+      padding: 16px 20px;
+    }
+    .popup-section-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: rgba(255,255,255,0.35);
+      margin-bottom: 10px;
+    }
+    .popup-setting {
+      margin-bottom: 12px;
+    }
+    .popup-label {
+      display: block;
+      font-size: 12px;
+      font-weight: 500;
+      color: rgba(255,255,255,0.6);
+      margin-bottom: 6px;
+    }
+    .popup-input {
+      width: 100%;
+      padding: 8px 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.1);
+      background: rgba(255,255,255,0.05);
+      color: #f4f4f5;
+      font-size: 13px;
+      font-family: inherit;
+      outline: none;
+      transition: all 0.2s ease;
+    }
+    .popup-input::placeholder { color: rgba(255,255,255,0.3); }
+    .popup-input:focus {
+      border-color: rgba(139,92,246,0.5);
+      box-shadow: 0 0 0 2px rgba(139,92,246,0.15);
+    }
+    .popup-btn {
+      width: 100%;
+      padding: 9px;
+      border-radius: 8px;
+      border: none;
+      font-size: 13px;
+      font-weight: 500;
+      font-family: inherit;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      margin-top: 8px;
+    }
+    .popup-btn-primary {
+      background: linear-gradient(135deg, #7c3aed, #6d28d9);
+      color: #fff;
+      box-shadow: 0 2px 8px rgba(124,58,237,0.3);
+    }
+    .popup-btn-primary:hover {
+      background: linear-gradient(135deg, #8b5cf6, #7c3aed);
+    }
+    .popup-btn-link {
+      background: rgba(255,255,255,0.06);
+      color: rgba(255,255,255,0.7);
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+    .popup-btn-link:hover {
+      background: rgba(255,255,255,0.1);
+      color: #fff;
+    }
+    .popup-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.06);
+      font-size: 13px;
+      margin-bottom: 12px;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .status-connected { background: #10B981; box-shadow: 0 0 6px rgba(16,185,129,0.4); }
+    .status-disconnected { background: #F59E0B; box-shadow: 0 0 6px rgba(245,158,11,0.3); }
+    .popup-recent {
+      list-style: none;
+    }
+    .popup-recent li {
+      padding: 8px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .popup-recent li:last-child { border-bottom: none; }
+    .recent-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      background: rgba(139,92,246,0.15);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      color: rgba(139,92,246,0.8);
+      font-size: 12px;
+    }
+    .recent-info { flex: 1; min-width: 0; }
+    .recent-title {
+      font-size: 13px;
+      color: #f4f4f5;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .recent-meta {
+      font-size: 11px;
+      color: rgba(255,255,255,0.35);
+    }
+    .popup-empty {
+      text-align: center;
+      padding: 16px;
+      color: rgba(255,255,255,0.3);
+      font-size: 13px;
+    }
+    .popup-footer {
+      padding: 12px 20px;
+      border-top: 1px solid rgba(255,255,255,0.06);
+      text-align: center;
+    }
+    .popup-footer a {
+      color: rgba(139,92,246,0.7);
+      text-decoration: none;
+      font-size: 12px;
+    }
+    .popup-footer a:hover { color: #8b5cf6; }
+  </style>
+</head>
+<body>
+  <div class="popup-header">
+    <div class="popup-brand">
+      <div class="popup-logo">K</div>
+      <div class="popup-title">Keynection</div>
+    </div>
+    <div class="popup-subtitle">AI-powered command palette for the web</div>
+    <div class="popup-shortcut">
+      Press <kbd class="kbd">Option</kbd> + <kbd class="kbd">Space</kbd> or <kbd class="kbd">Cmd</kbd> + <kbd class="kbd">K</kbd> on any page
+    </div>
+  </div>
+
+  <div class="popup-section">
+    <div class="popup-section-title">Connection</div>
+    <div class="popup-status" id="status">
+      <div class="status-dot status-disconnected" id="status-dot"></div>
+      <span id="status-text">Checking...</span>
+    </div>
+    <div class="popup-setting">
+      <label class="popup-label">Server URL</label>
+      <input type="text" class="popup-input" id="server-url" placeholder="https://your-app.replit.app" />
+    </div>
+    <button class="popup-btn popup-btn-primary" id="save-btn">Save & Connect</button>
+  </div>
+
+  <div class="popup-section">
+    <div class="popup-section-title">Recent Actions</div>
+    <ul class="popup-recent" id="recent-list">
+      <li class="popup-empty">No recent actions</li>
+    </ul>
+  </div>
+
+  <div class="popup-footer" id="popup-footer" style="display:none;">
+    <a href="#" id="dashboard-link" target="_blank">Open Dashboard</a>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
