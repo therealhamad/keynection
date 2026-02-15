@@ -1,5 +1,6 @@
 // Keynection Background Service Worker
 // Handles OAuth flows, API calls, and message passing
+// All integrations work directly from extension - no server required for integrations
 
 // ============================================================
 // COMMAND LISTENER
@@ -18,29 +19,43 @@ chrome.commands.onCommand.addListener(async (command) => {
 // ============================================================
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const handlers = {
+    // Google (unified OAuth)
+    "googleAuth": () => initiateGoogleOAuth(),
+    "checkGoogleAuth": () => checkGoogleAuth(),
+    
     // Gmail
     "sendGmail": () => handleSendGmail(message.to, message.subject, message.body),
-    "gmailAuth": () => initiateGmailOAuth(),
-    "checkGmailAuth": () => checkGmailAuth(),
+    
+    // Google Calendar
+    "fetchCalendarActivity": () => fetchCalendarActivity(),
+    "createCalendarEvent": () => handleCreateCalendarEvent(message),
+    
+    // Google Docs
+    "createGoogleDoc": () => handleCreateGoogleDoc(message.title, message.content),
+    
+    // Google Sheets
+    "appendSheetRow": () => handleAppendSheetRow(message.spreadsheetId, message.sheetName, message.values),
+    "fetchSpreadsheets": () => handleFetchSpreadsheets(),
     
     // Slack
     "sendSlack": () => handleSendSlack(message.channel, message.message),
     
+    // Discord
+    "sendDiscord": () => handleSendDiscord(message.message),
+    
     // Notion
     "createNotionPage": () => handleCreateNotionPage(message.title, message.content, message.parentId, message.parentType),
     "fetchNotionParents": () => fetchNotionParents(),
+    "fetchNotionActivity": () => fetchNotionActivity(),
     
     // GitHub
     "fetchGitHubActivity": () => fetchGitHubActivity(),
     
-    // Notion Activity
-    "fetchNotionActivity": () => fetchNotionActivity(),
+    // Linear
+    "createLinearIssue": () => handleCreateLinearIssue(message),
+    "fetchLinearTeams": () => handleFetchLinearTeams(),
     
-    // Calendar
-    "fetchCalendarActivity": () => fetchCalendarActivity(),
-    "calendarConnect": () => initiateCalendarOAuth(),
-    
-    // Server (legacy)
+    // Server (for AI only)
     "executeAction": () => handleExecuteAction(message.data),
     "getServerUrl": () => getServerUrl().then(url => ({ serverUrl: url })),
     "setServerUrl": () => {
@@ -48,6 +63,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         chrome.storage.local.set({ serverUrl: message.url }, () => resolve({ success: true }));
       });
     },
+    
+    // Check integration status
+    "checkIntegrationStatus": () => checkAllIntegrationStatus(),
   };
 
   const handler = handlers[message.action];
@@ -60,14 +78,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // ============================================================
-// GMAIL OAUTH & API
+// GOOGLE OAUTH (Unified - Gmail, Calendar, Docs, Sheets, Drive)
 // ============================================================
-const GMAIL_SCOPES = 'https://www.googleapis.com/auth/gmail.send';
+const GOOGLE_SCOPES = [
+  'https://www.googleapis.com/auth/gmail.send',
+  'https://www.googleapis.com/auth/calendar',
+  'https://www.googleapis.com/auth/calendar.events',
+  'https://www.googleapis.com/auth/documents',
+  'https://www.googleapis.com/auth/spreadsheets',
+  'https://www.googleapis.com/auth/drive.file',
+  'https://www.googleapis.com/auth/drive.readonly',
+].join(' ');
 
-async function initiateGmailOAuth() {
+async function initiateGoogleOAuth() {
   const clientId = await getOAuthClientId();
   if (!clientId) {
-    throw new Error('Gmail OAuth not configured. Add your OAuth Client ID in settings.');
+    throw new Error('Google OAuth not configured. Add your OAuth Client ID in settings.');
   }
 
   const redirectUri = chrome.identity.getRedirectURL();
@@ -75,8 +101,9 @@ async function initiateGmailOAuth() {
   authUrl.searchParams.set('client_id', clientId);
   authUrl.searchParams.set('redirect_uri', redirectUri);
   authUrl.searchParams.set('response_type', 'token');
-  authUrl.searchParams.set('scope', GMAIL_SCOPES);
+  authUrl.searchParams.set('scope', GOOGLE_SCOPES);
   authUrl.searchParams.set('prompt', 'consent');
+  authUrl.searchParams.set('access_type', 'online');
 
   return new Promise((resolve, reject) => {
     chrome.identity.launchWebAuthFlow(
@@ -91,7 +118,6 @@ async function initiateGmailOAuth() {
           return;
         }
 
-        // Extract access token from URL hash
         const hashParams = new URLSearchParams(new URL(responseUrl).hash.substring(1));
         const accessToken = hashParams.get('access_token');
         
@@ -101,7 +127,10 @@ async function initiateGmailOAuth() {
         }
 
         // Store the token
-        chrome.storage.local.set({ gmail_access_token: accessToken }, () => {
+        chrome.storage.local.set({ 
+          google_access_token: accessToken,
+          google_connected: true 
+        }, () => {
           resolve({ success: true, token: accessToken });
         });
       }
@@ -109,34 +138,45 @@ async function initiateGmailOAuth() {
   });
 }
 
-async function checkGmailAuth() {
-  const token = await getStoredToken('gmail_access_token');
+async function checkGoogleAuth() {
+  const token = await getStoredToken('google_access_token');
   if (!token) {
     return { authenticated: false };
   }
 
-  // Verify token is still valid
   try {
     const response = await fetch(`https://www.googleapis.com/oauth2/v1/tokeninfo?access_token=${token}`);
     if (response.ok) {
       return { authenticated: true };
     }
-    // Token expired, clear it
-    await chrome.storage.local.remove('gmail_access_token');
+    await chrome.storage.local.remove(['google_access_token', 'google_connected']);
     return { authenticated: false };
   } catch (e) {
     return { authenticated: false };
   }
 }
 
-async function handleSendGmail(to, subject, body) {
-  let token = await getStoredToken('gmail_access_token');
-  
+async function getGoogleToken() {
+  const token = await getStoredToken('google_access_token');
   if (!token) {
-    // Need to authenticate first
-    const authResult = await initiateGmailOAuth();
-    token = authResult.token;
+    throw new Error('Google not connected. Click "Connect Google" in settings.');
   }
+  
+  // Verify token is still valid
+  const response = await fetch(`https://www.googleapis.com/oauth2/v1/tokeninfo?access_token=${token}`);
+  if (!response.ok) {
+    await chrome.storage.local.remove(['google_access_token', 'google_connected']);
+    throw new Error('Google session expired. Please reconnect in settings.');
+  }
+  
+  return token;
+}
+
+// ============================================================
+// GMAIL API
+// ============================================================
+async function handleSendGmail(to, subject, body) {
+  const token = await getGoogleToken();
 
   // Build RFC 2822 email
   const email = [
@@ -148,7 +188,6 @@ async function handleSendGmail(to, subject, body) {
     body
   ].join('\r\n');
 
-  // Base64 URL encode
   const encodedEmail = btoa(unescape(encodeURIComponent(email)))
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
@@ -164,16 +203,206 @@ async function handleSendGmail(to, subject, body) {
   });
 
   if (!response.ok) {
-    if (response.status === 401) {
-      // Token expired, clear and retry
-      await chrome.storage.local.remove('gmail_access_token');
-      throw new Error('Gmail authentication expired. Please try again.');
-    }
     const error = await response.json().catch(() => ({}));
     throw new Error(error.error?.message || `Gmail API error: ${response.status}`);
   }
 
   return { success: true, message: 'Email sent successfully!' };
+}
+
+// ============================================================
+// GOOGLE CALENDAR API
+// ============================================================
+async function fetchCalendarActivity() {
+  let token;
+  try {
+    token = await getGoogleToken();
+  } catch (e) {
+    return { meetings: [], error: 'Google not connected' };
+  }
+
+  try {
+    const now = new Date();
+    const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    
+    const url = new URL('https://www.googleapis.com/calendar/v3/calendars/primary/events');
+    url.searchParams.set('timeMin', yesterday.toISOString());
+    url.searchParams.set('timeMax', now.toISOString());
+    url.searchParams.set('singleEvents', 'true');
+    url.searchParams.set('orderBy', 'startTime');
+
+    const response = await fetch(url.toString(), {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Calendar API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const meetings = [];
+
+    for (const event of (data.items || [])) {
+      if (event.status === 'cancelled') continue;
+      if (!event.start || !event.end) continue;
+
+      const selfAttendee = event.attendees?.find(a => a.self);
+      if (selfAttendee?.responseStatus === 'declined') continue;
+
+      const startTime = new Date(event.start.dateTime || event.start.date);
+      const endTime = new Date(event.end.dateTime || event.end.date);
+      const durationMinutes = Math.round((endTime - startTime) / (1000 * 60));
+
+      meetings.push({
+        summary: event.summary || 'Untitled Event',
+        start: event.start.dateTime || event.start.date,
+        duration: durationMinutes,
+        attendees: event.attendees?.length || 1,
+        url: event.htmlLink
+      });
+    }
+
+    return { meetings: meetings.slice(0, 15) };
+  } catch (error) {
+    return { meetings: [], error: error.message };
+  }
+}
+
+async function handleCreateCalendarEvent(message) {
+  const token = await getGoogleToken();
+
+  const { title, description, startTime, endTime, attendees, location } = message;
+
+  const response = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      summary: title,
+      description,
+      location,
+      start: { dateTime: startTime, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
+      end: { dateTime: endTime, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
+      attendees: attendees?.map(email => ({ email })),
+    })
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Calendar API error: ${response.status}`);
+  }
+
+  const result = await response.json();
+  return { success: true, eventId: result.id, link: result.htmlLink };
+}
+
+// ============================================================
+// GOOGLE DOCS API
+// ============================================================
+async function handleCreateGoogleDoc(title, content) {
+  const token = await getGoogleToken();
+
+  // Create document
+  const createResponse = await fetch('https://docs.googleapis.com/v1/documents', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ title })
+  });
+
+  if (!createResponse.ok) {
+    const error = await createResponse.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Docs API error: ${createResponse.status}`);
+  }
+
+  const doc = await createResponse.json();
+  const documentId = doc.documentId;
+
+  // Insert content
+  const updateResponse = await fetch(`https://docs.googleapis.com/v1/documents/${documentId}:batchUpdate`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      requests: [{
+        insertText: {
+          location: { index: 1 },
+          text: content
+        }
+      }]
+    })
+  });
+
+  if (!updateResponse.ok) {
+    console.warn('Failed to insert content, but doc was created');
+  }
+
+  const url = `https://docs.google.com/document/d/${documentId}/edit`;
+  return { success: true, documentId, url };
+}
+
+// ============================================================
+// GOOGLE SHEETS API
+// ============================================================
+async function handleFetchSpreadsheets() {
+  let token;
+  try {
+    token = await getGoogleToken();
+  } catch (e) {
+    return { spreadsheets: [] };
+  }
+
+  try {
+    const url = new URL('https://www.googleapis.com/drive/v3/files');
+    url.searchParams.set('q', "mimeType='application/vnd.google-apps.spreadsheet'");
+    url.searchParams.set('pageSize', '20');
+    url.searchParams.set('fields', 'files(id,name)');
+
+    const response = await fetch(url.toString(), {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+
+    if (!response.ok) {
+      return { spreadsheets: [] };
+    }
+
+    const data = await response.json();
+    return { 
+      spreadsheets: (data.files || []).map(f => ({ id: f.id, name: f.name }))
+    };
+  } catch (e) {
+    return { spreadsheets: [] };
+  }
+}
+
+async function handleAppendSheetRow(spreadsheetId, sheetName, values) {
+  const token = await getGoogleToken();
+
+  const range = `${sheetName || 'Sheet1'}!A:Z`;
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(range)}:append?valueInputOption=USER_ENTERED`;
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ values: [values] })
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Sheets API error: ${response.status}`);
+  }
+
+  const result = await response.json();
+  return { success: true, updatedRange: result.updates?.updatedRange };
 }
 
 // ============================================================
@@ -200,10 +429,34 @@ async function handleSendSlack(channel, message) {
 }
 
 // ============================================================
+// DISCORD WEBHOOK
+// ============================================================
+async function handleSendDiscord(messageContent) {
+  const webhookUrl = await getStoredToken('discord_webhook_url');
+  
+  if (!webhookUrl) {
+    throw new Error('Discord webhook not configured. Add your webhook URL in settings.');
+  }
+  
+  const response = await fetch(webhookUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      content: messageContent,
+      username: 'Keynection'
+    })
+  });
+  
+  if (!response.ok) {
+    throw new Error(`Discord webhook failed: ${response.status}`);
+  }
+  
+  return { success: true, message: 'Message sent to Discord!' };
+}
+
+// ============================================================
 // NOTION API
 // ============================================================
-
-// Fetch available Notion pages/databases to use as parents
 async function fetchNotionParents() {
   const token = await getStoredToken('notion_token');
   if (!token) {
@@ -233,7 +486,6 @@ async function fetchNotionParents() {
     const parents = [];
 
     for (const page of data.results) {
-      // Extract title
       const titleProp = page.properties?.Name || page.properties?.Title || page.properties?.title;
       let title = 'Untitled';
       if (titleProp?.title?.[0]?.plain_text) {
@@ -281,7 +533,6 @@ async function fetchNotionParents() {
   }
 }
 
-// Create a page in Notion
 async function handleCreateNotionPage(title, content, parentId, parentType) {
   const token = await getStoredToken('notion_token');
   
@@ -293,12 +544,9 @@ async function handleCreateNotionPage(title, content, parentId, parentType) {
     throw new Error('No parent page selected. Choose where to save.');
   }
 
-  // Split content into paragraphs for better formatting
   const paragraphs = content.split('\n\n').filter(p => p.trim());
   
-  // Build children blocks
   const children = paragraphs.slice(0, 50).map(paragraph => {
-    // Check if it's a heading (starts with #)
     if (paragraph.startsWith('# ')) {
       return {
         object: 'block',
@@ -316,7 +564,6 @@ async function handleCreateNotionPage(title, content, parentId, parentType) {
         }
       };
     } else if (paragraph.startsWith('- ') || paragraph.startsWith('• ')) {
-      // Bulleted list
       return {
         object: 'block',
         type: 'bulleted_list_item',
@@ -335,7 +582,6 @@ async function handleCreateNotionPage(title, content, parentId, parentType) {
     }
   });
 
-  // If no children, add at least one paragraph
   if (children.length === 0) {
     children.push({
       object: 'block',
@@ -349,7 +595,6 @@ async function handleCreateNotionPage(title, content, parentId, parentType) {
   let pageData;
   
   if (parentType === 'database') {
-    // Create page in database - use 'Name' or 'Title' property
     pageData = {
       parent: { database_id: parentId },
       properties: {
@@ -358,7 +603,6 @@ async function handleCreateNotionPage(title, content, parentId, parentType) {
       children: children
     };
   } else {
-    // Create page under another page
     pageData = {
       parent: { page_id: parentId },
       properties: {
@@ -425,14 +669,12 @@ async function fetchNotionActivity() {
     for (const page of data.results) {
       if (new Date(page.last_edited_time) < new Date(cutoff)) continue;
 
-      // Extract title
       const titleProp = page.properties?.Name || page.properties?.Title || page.properties?.title;
       let title = 'Untitled';
       if (titleProp?.title?.[0]?.plain_text) {
         title = titleProp.title[0].plain_text;
       }
 
-      // Extract status
       const statusProp = page.properties?.Status;
       let status = '';
       if (statusProp?.select?.name) {
@@ -475,7 +717,6 @@ async function fetchGitHubActivity() {
     const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const since = cutoff.toISOString();
     
-    // Strategy 1: Try events API first (works for public activity)
     let recentRepos = new Set();
     
     try {
@@ -496,10 +737,9 @@ async function fetchGitHubActivity() {
         });
       }
     } catch (e) {
-      // Events API failed, continue with fallback
+      // Events API failed
     }
 
-    // Strategy 2: If no repos found via events, fetch user's repos directly
     if (recentRepos.size === 0) {
       try {
         const reposRes = await fetch(
@@ -509,7 +749,6 @@ async function fetchGitHubActivity() {
         
         if (reposRes.ok) {
           const repos = await reposRes.json();
-          // Filter to repos pushed in last 24h
           repos.forEach(r => {
             if (new Date(r.pushed_at) > cutoff) {
               recentRepos.add(r.full_name);
@@ -517,15 +756,14 @@ async function fetchGitHubActivity() {
           });
         }
       } catch (e) {
-        // Fallback failed too
+        // Fallback failed
       }
     }
 
     if (recentRepos.size === 0) {
-      return { commits: [], error: null }; // No recent activity, not an error
+      return { commits: [], error: null };
     }
 
-    // Fetch commits from each repo
     const allCommits = [];
     
     for (const repoFullName of recentRepos) {
@@ -553,7 +791,6 @@ async function fetchGitHubActivity() {
       }
     }
 
-    // Deduplicate by message
     const seen = new Set();
     const uniqueCommits = allCommits.filter(c => {
       if (seen.has(c.message)) return false;
@@ -561,7 +798,6 @@ async function fetchGitHubActivity() {
       return true;
     });
 
-    // Sort by time descending
     uniqueCommits.sort((a, b) => new Date(b.time) - new Date(a.time));
 
     return { commits: uniqueCommits.slice(0, 15) };
@@ -571,122 +807,156 @@ async function fetchGitHubActivity() {
 }
 
 // ============================================================
-// GOOGLE CALENDAR API
+// LINEAR API (GraphQL)
 // ============================================================
-const CALENDAR_SCOPES = 'https://www.googleapis.com/auth/calendar.readonly';
-
-async function initiateCalendarOAuth() {
-  const clientId = await getOAuthClientId();
-  if (!clientId) {
-    throw new Error('OAuth Client ID not configured. Add it in Settings.');
-  }
-
-  const redirectUri = chrome.identity.getRedirectURL();
-  const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
-  authUrl.searchParams.set('client_id', clientId);
-  authUrl.searchParams.set('redirect_uri', redirectUri);
-  authUrl.searchParams.set('response_type', 'token');
-  authUrl.searchParams.set('scope', CALENDAR_SCOPES);
-  authUrl.searchParams.set('prompt', 'consent');
-
-  return new Promise((resolve, reject) => {
-    chrome.identity.launchWebAuthFlow(
-      { url: authUrl.toString(), interactive: true },
-      (responseUrl) => {
-        if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-          return;
-        }
-        if (!responseUrl) {
-          reject(new Error('No response from OAuth'));
-          return;
-        }
-
-        const hashParams = new URLSearchParams(new URL(responseUrl).hash.substring(1));
-        const accessToken = hashParams.get('access_token');
-        
-        if (!accessToken) {
-          reject(new Error('Failed to get access token'));
-          return;
-        }
-
-        chrome.storage.local.set({ 
-          calendar_token: accessToken,
-          calendar_connected: true 
-        }, () => {
-          resolve({ success: true });
-        });
-      }
-    );
-  });
-}
-
-async function fetchCalendarActivity() {
-  const token = await getStoredToken('calendar_token');
-  const connected = await getStoredToken('calendar_connected');
-
-  if (!token || !connected) {
-    return { meetings: [], error: 'Calendar not connected' };
+async function handleFetchLinearTeams() {
+  const apiKey = await getStoredToken('linear_api_key');
+  if (!apiKey) {
+    return { teams: [] };
   }
 
   try {
-    const now = new Date();
-    const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-    
-    const timeMin = yesterday.toISOString();
-    const timeMax = now.toISOString();
-
-    const url = new URL('https://www.googleapis.com/calendar/v3/calendars/primary/events');
-    url.searchParams.set('timeMin', timeMin);
-    url.searchParams.set('timeMax', timeMax);
-    url.searchParams.set('singleEvents', 'true');
-    url.searchParams.set('orderBy', 'startTime');
-
-    const response = await fetch(url.toString(), {
-      headers: { 'Authorization': `Bearer ${token}` }
+    const response = await fetch('https://api.linear.app/graphql', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': apiKey
+      },
+      body: JSON.stringify({
+        query: `{ teams { nodes { id name key } } }`
+      })
     });
 
     if (!response.ok) {
-      if (response.status === 401) {
-        // Token expired, clear it
-        await chrome.storage.local.remove(['calendar_token', 'calendar_connected']);
-        return { meetings: [], error: 'Calendar token expired. Please reconnect.' };
-      }
-      throw new Error(`Calendar API error: ${response.status}`);
+      return { teams: [] };
     }
 
     const data = await response.json();
-    const meetings = [];
-
-    for (const event of (data.items || [])) {
-      // Skip cancelled events
-      if (event.status === 'cancelled') continue;
-      
-      // Skip events without start/end
-      if (!event.start || !event.end) continue;
-
-      // Skip declined events
-      const selfAttendee = event.attendees?.find(a => a.self);
-      if (selfAttendee?.responseStatus === 'declined') continue;
-
-      // Calculate duration
-      const startTime = new Date(event.start.dateTime || event.start.date);
-      const endTime = new Date(event.end.dateTime || event.end.date);
-      const durationMinutes = Math.round((endTime - startTime) / (1000 * 60));
-
-      meetings.push({
-        summary: event.summary || 'Untitled Event',
-        start: event.start.dateTime || event.start.date,
-        duration: durationMinutes,
-        attendees: event.attendees?.length || 1,
-        url: event.htmlLink
-      });
-    }
-
-    return { meetings: meetings.slice(0, 15) };
-  } catch (error) {
-    return { meetings: [], error: error.message };
+    return { teams: data?.data?.teams?.nodes || [] };
+  } catch (e) {
+    return { teams: [] };
   }
+}
+
+async function handleCreateLinearIssue(message) {
+  const apiKey = await getStoredToken('linear_api_key');
+  if (!apiKey) {
+    throw new Error('Linear API key not configured. Add it in Settings.');
+  }
+
+  const { title, description, teamId, priority } = message;
+
+  // If no teamId, fetch first available team
+  let targetTeamId = teamId;
+  if (!targetTeamId) {
+    const teamsResult = await handleFetchLinearTeams();
+    if (teamsResult.teams.length > 0) {
+      targetTeamId = teamsResult.teams[0].id;
+    } else {
+      throw new Error('No Linear teams found');
+    }
+  }
+
+  const response = await fetch('https://api.linear.app/graphql', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': apiKey
+    },
+    body: JSON.stringify({
+      query: `
+        mutation CreateIssue($input: IssueCreateInput!) {
+          issueCreate(input: $input) {
+            success
+            issue {
+              id
+              identifier
+              url
+            }
+          }
+        }
+      `,
+      variables: {
+        input: {
+          teamId: targetTeamId,
+          title,
+          description,
+          priority: priority || undefined
+        }
+      }
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Linear API error: ${response.status}`);
+  }
+
+  const data = await response.json();
+  
+  if (data.errors) {
+    throw new Error(data.errors[0]?.message || 'Linear API error');
+  }
+
+  if (!data?.data?.issueCreate?.success) {
+    throw new Error('Failed to create Linear issue');
+  }
+
+  const issue = data.data.issueCreate.issue;
+  return { 
+    success: true, 
+    message: `Issue ${issue.identifier} created!`,
+    identifier: issue.identifier,
+    url: issue.url 
+  };
+}
+
+// ============================================================
+// CHECK ALL INTEGRATION STATUS
+// ============================================================
+async function checkAllIntegrationStatus() {
+  const status = {
+    google: false,
+    slack: false,
+    discord: false,
+    notion: false,
+    github: false,
+    linear: false,
+    server: false
+  };
+
+  // Google
+  const googleToken = await getStoredToken('google_access_token');
+  if (googleToken) {
+    try {
+      const response = await fetch(`https://www.googleapis.com/oauth2/v1/tokeninfo?access_token=${googleToken}`);
+      status.google = response.ok;
+    } catch (e) {
+      status.google = false;
+    }
+  }
+
+  // Slack
+  status.slack = !!(await getStoredToken('slack_webhook_url'));
+
+  // Discord
+  status.discord = !!(await getStoredToken('discord_webhook_url'));
+
+  // Notion
+  status.notion = !!(await getStoredToken('notion_token'));
+
+  // GitHub
+  const githubToken = await getStoredToken('github_token');
+  const githubUsername = await getStoredToken('github_username');
+  status.github = !!(githubToken && githubUsername);
+
+  // Linear
+  status.linear = !!(await getStoredToken('linear_api_key'));
+
+  // Server (for AI)
+  const serverUrl = await getServerUrl();
+  status.server = !!serverUrl;
+
+  return { status };
 }
 
 // ============================================================
@@ -719,7 +989,7 @@ async function getServerUrl() {
 async function handleExecuteAction(data) {
   const serverUrl = await getServerUrl();
   if (!serverUrl) {
-    throw new Error("Server URL not configured. Open Keynection settings to set it up.");
+    throw new Error("Server URL not configured. This is needed for AI-powered content generation.");
   }
   const response = await fetch(`${serverUrl}/api/actions/execute`, {
     method: "POST",

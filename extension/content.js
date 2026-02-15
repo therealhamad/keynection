@@ -26,54 +26,57 @@
   };
 
   // ============================================================
-  // GEMINI API CLIENT
+  // AI CLIENT (Claude only; Gemini can be re-added later)
   // ============================================================
-  const GeminiClient = {
-    API_ENDPOINT: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent',
+  const AIClient = {
+    CLAUDE_ENDPOINT: 'https://api.anthropic.com/v1/messages',
 
-    async getApiKey() {
+    async getClaudeKey() {
       return new Promise((resolve) => {
-        chrome.storage.local.get(['gemini_api_key'], (result) => {
-          resolve(result.gemini_api_key || null);
+        chrome.storage.local.get(['claude_api_key'], (result) => {
+          resolve(result.claude_api_key || null);
         });
       });
     },
 
-    async setApiKey(key) {
-      return new Promise((resolve) => {
-        chrome.storage.local.set({ gemini_api_key: key }, resolve);
-      });
+    async generateContent(prompt) {
+      const apiKey = await this.getClaudeKey();
+      return this.generateWithClaude(prompt, apiKey);
     },
 
-    async generateContent(prompt) {
-      const apiKey = await this.getApiKey();
-      
+    async generateWithClaude(prompt, apiKey) {
       if (!apiKey) {
-        throw new Error('Gemini API key not configured. Go to Settings to add your API key.');
+        throw new Error('Claude API key not configured. Go to Settings to add your API key.');
       }
 
       try {
-        const response = await fetch(`${this.API_ENDPOINT}?key=${apiKey}`, {
+        const response = await fetch(this.CLAUDE_ENDPOINT, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+            'anthropic-dangerous-direct-browser-access': 'true'
           },
           body: JSON.stringify({
-            contents: [{
-              parts: [{ text: prompt }]
+            model: 'claude-sonnet-4-20250514',
+            max_tokens: 4096,
+            messages: [{
+              role: 'user',
+              content: prompt
             }]
           })
         });
 
         if (!response.ok) {
           const errorData = await response.json();
-          throw new Error(errorData.error?.message || `Gemini API error: ${response.status}`);
+          throw new Error(errorData.error?.message || `Claude API error: ${response.status}`);
         }
 
         const data = await response.json();
-        return data.candidates[0].content.parts[0].text;
+        return data.content[0].text;
       } catch (error) {
-        console.error('Keynection: Gemini API call failed:', error);
+        console.error('Keynection: Claude API call failed:', error);
         throw error;
       }
     },
@@ -88,6 +91,33 @@
           return JSON.parse(jsonMatch[0]);
         }
         throw new Error('Failed to parse AI response');
+      }
+    },
+
+    async testConnection(apiKey) {
+      try {
+        const response = await fetch(this.CLAUDE_ENDPOINT, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+            'anthropic-dangerous-direct-browser-access': 'true'
+          },
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-20250514',
+            max_tokens: 50,
+            messages: [{ role: 'user', content: 'Say "Connected!" in one word.' }]
+          })
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error?.message || 'Connection failed');
+        }
+        return { success: true };
+      } catch (error) {
+        return { success: false, error: error.message };
       }
     },
 
@@ -205,24 +235,129 @@ Return ONLY the formatted standup message.
       return await this.generateContent(prompt);
     },
 
-    async testConnection(apiKey) {
-      try {
-        const response = await fetch(`${this.API_ENDPOINT}?key=${apiKey}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: 'Say "Connected!" in one word.' }] }]
-          })
-        });
+    async generateGoogleDoc(context) {
+      const contentSource = context.hasSelection 
+        ? context.selectedText
+        : context.pageContent?.substring(0, 3000);
 
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.error?.message || 'Connection failed');
-        }
-        return { success: true };
-      } catch (error) {
-        return { success: false, error: error.message };
-      }
+      const prompt = `
+Structure this content for a Google Doc:
+
+Page Title: ${context.pageTitle}
+URL: ${context.pageUrl}
+Content: ${contentSource}
+
+Create:
+- Title (clear, engaging)
+- Summary (2-3 sentences)
+- Main content with headers (### for sections)
+- Key points as bullet list
+- Source link at bottom
+
+Return ONLY a JSON object (no markdown, no code fences):
+{"title": "Document title", "summary": "Brief summary", "content": "Full formatted content with markdown headers and bullets"}
+`;
+
+      const response = await this.generateContent(prompt);
+      return this.parseJsonResponse(response);
+    },
+
+    async generateDiscordMessage(context) {
+      const contentSource = context.hasSelection 
+        ? context.selectedText
+        : context.pageContent?.substring(0, 2000);
+
+      const prompt = `
+Create a Discord-friendly message from this content:
+
+Title: ${context.pageTitle}
+URL: ${context.pageUrl}
+Content: ${contentSource}
+
+Requirements:
+- Casual, engaging tone
+- Use Discord markdown (**bold**, *italic*, \`code\`)
+- 2-3 relevant emojis
+- Key points as bullets
+- Include source link
+- Under 300 words
+
+Return ONLY a JSON object (no markdown, no code fences):
+{"message": "Formatted Discord message", "suggestedChannel": "general or relevant channel name"}
+`;
+
+      const response = await this.generateContent(prompt);
+      return this.parseJsonResponse(response);
+    },
+
+    async generateLinearIssue(context) {
+      const contentSource = context.hasSelection 
+        ? context.selectedText
+        : context.pageContent?.substring(0, 2000);
+
+      const prompt = `
+Create a Linear issue from this context:
+
+URL: ${context.pageUrl}
+Content: ${contentSource}
+
+Generate:
+- Title: Clear, concise (max 80 chars)
+- Description: Steps to reproduce (if bug), requirements (if task), context
+- Priority: 0 (no priority), 1 (urgent), 2 (high), 3 (medium), 4 (low)
+- Labels: Suggest relevant labels (bug, feature, improvement, etc.)
+
+Return ONLY a JSON object (no markdown, no code fences):
+{"title": "Issue title", "description": "Detailed description", "priority": 2, "labels": ["bug"]}
+`;
+
+      const response = await this.generateContent(prompt);
+      return this.parseJsonResponse(response);
+    },
+
+    async generateCalendarEvent(context) {
+      const now = new Date();
+      const prompt = `
+Extract meeting details from this text:
+
+Text: ${context.selectedText || context.pageContent?.substring(0, 1000)}
+
+Current date/time: ${now.toISOString()}
+
+Extract:
+- Title: Meeting topic/purpose
+- Start time: Parse relative dates (tomorrow, next Tuesday, etc.) to ISO format
+- Duration: In minutes (default 30)
+- Description: Brief agenda
+- Attendees: Email addresses if mentioned (empty array if none)
+
+Return ONLY a JSON object (no markdown, no code fences):
+{"title": "Meeting title", "startTime": "2024-03-20T14:00:00", "duration": 30, "description": "Meeting agenda", "attendees": []}
+`;
+
+      const response = await this.generateContent(prompt);
+      return this.parseJsonResponse(response);
+    },
+
+    async generateSheetData(context) {
+      const contentSource = context.hasSelection 
+        ? context.selectedText
+        : `Title: ${context.pageTitle}\nURL: ${context.pageUrl}`;
+
+      const prompt = `
+Extract structured data from this for logging to a spreadsheet:
+
+Content: ${contentSource}
+
+Create fields (column names) and values based on the content type.
+Common fields: Date, Title, URL, Category, Notes, Status
+
+Return ONLY a JSON object (no markdown, no code fences):
+{"fields": ["Date", "Title", "URL", "Notes"], "values": ["2024-03-15", "Example", "https://...", "Brief note"]}
+`;
+
+      const response = await this.generateContent(prompt);
+      return this.parseJsonResponse(response);
     }
   };
 
@@ -416,7 +551,12 @@ Return ONLY the formatted standup message.
     { id: "generate-standup", name: "Generate Standup Update", description: "Auto-create from GitHub, Notion & Calendar", integration: "Multi", icon: "bar-chart", category: "smart", color: "#10B981", badge: "Smart", alwaysShow: true },
     { id: "send-email", name: "Send Email", description: "Compose a new email", integration: "Gmail", icon: "mail", category: "action", color: "#EA4335", badge: "Action" },
     { id: "send-slack", name: "Send Message", description: "Post to Slack", integration: "Slack", icon: "message-circle", category: "action", color: "#4A154B", badge: "Action" },
+    { id: "send-discord", name: "Send to Discord", description: "Post message to Discord", integration: "Discord", icon: "message-circle", category: "action", color: "#5865F2", badge: "Action" },
     { id: "create-notion", name: "Create Page", description: "Create a new page", integration: "Notion", icon: "file-text", category: "action", color: "#787774", badge: "Action" },
+    { id: "create-doc", name: "Create Document", description: "Create a Google Doc", integration: "Google Docs", icon: "file-text", category: "action", color: "#4285F4", badge: "Action" },
+    { id: "log-sheets", name: "Log to Sheets", description: "Append data to a spreadsheet", integration: "Google Sheets", icon: "file", category: "action", color: "#0F9D58", badge: "Action" },
+    { id: "create-event", name: "Schedule Meeting", description: "Create calendar event", integration: "Calendar", icon: "bar-chart", category: "action", color: "#4285F4", badge: "Action" },
+    { id: "create-linear-issue", name: "Create Linear Issue", description: "Create a new issue in Linear", integration: "Linear", icon: "list-checks", category: "action", color: "#5E6AD2", badge: "Action" },
   ];
 
   function getSmartActions(context) {
@@ -523,6 +663,93 @@ Return ONLY the formatted standup message.
         color: "#6e40c9", 
         badge: "Smart",
         contextReason: "GitHub page"
+      });
+    }
+
+    // Save article to Google Docs
+    if (context.isArticle && !context.hasSelection) {
+      smartActions.push({
+        id: "save-docs", 
+        name: "Save to Google Docs", 
+        description: "Create a structured Google Doc",
+        integration: "Google Docs", 
+        icon: "file-text", 
+        category: "smart", 
+        color: "#4285F4", 
+        badge: "Smart",
+        contextReason: "Article detected"
+      });
+      smartActions.push({
+        id: "share-discord", 
+        name: "Share to Discord", 
+        description: "Post article summary to Discord",
+        integration: "Discord", 
+        icon: "message-circle", 
+        category: "smart", 
+        color: "#5865F2", 
+        badge: "Smart",
+        contextReason: "Article detected"
+      });
+    }
+
+    // Selection-based Google Docs
+    if (context.hasSelection && context.selectedText.length > 100) {
+      smartActions.push({
+        id: "save-selection-docs", 
+        name: "Save Selection to Docs", 
+        description: "Create doc from selection",
+        integration: "Google Docs", 
+        icon: "file-text", 
+        category: "smart", 
+        color: "#4285F4", 
+        badge: "Smart",
+        contextReason: `${context.selectedText.length} chars selected`
+      });
+    }
+
+    // Create Linear issue from selected text (bugs, tasks)
+    if (context.hasSelection && context.selectedText.length > 30) {
+      smartActions.push({
+        id: "report-bug", 
+        name: "Report Bug to Linear", 
+        description: "Create Linear issue from selection",
+        integration: "Linear", 
+        icon: "list-checks", 
+        category: "smart", 
+        color: "#5E6AD2", 
+        badge: "Smart",
+        contextReason: context.hasTaskLikeContent ? "Bug/task detected" : "Text selected"
+      });
+    }
+
+    // Schedule meeting from text (email context or selected text with date/time)
+    const hasDateTimeMention = context.hasSelection && /\b(tomorrow|next|monday|tuesday|wednesday|thursday|friday|saturday|sunday|meeting|call|sync|\d{1,2}:\d{2}|am|pm)\b/i.test(context.selectedText);
+    if (hasDateTimeMention) {
+      smartActions.push({
+        id: "schedule-meeting", 
+        name: "Schedule Meeting", 
+        description: "Create calendar event from text",
+        integration: "Calendar", 
+        icon: "bar-chart", 
+        category: "smart", 
+        color: "#4285F4", 
+        badge: "Smart",
+        contextReason: "Date/time detected"
+      });
+    }
+
+    // Log to Sheets - for structured data pages
+    if (context.pageType === 'general' && context.wordCount < 500) {
+      smartActions.push({
+        id: "log-page-sheets", 
+        name: "Log to Sheets", 
+        description: "Record this page to spreadsheet",
+        integration: "Google Sheets", 
+        icon: "file", 
+        category: "smart", 
+        color: "#0F9D58", 
+        badge: "Smart",
+        contextReason: "Quick log"
       });
     }
 
@@ -723,7 +950,14 @@ Return ONLY the formatted standup message.
     currentAction = action;
     
     // Smart actions that auto-generate content
-    const autoGenerateActions = ["email-page", "email-quote", "summarize-slack", "slack-quote", "save-notion", "save-selection-notion", "github-comment"];
+    const autoGenerateActions = [
+      "email-page", "email-quote", 
+      "summarize-slack", "slack-quote", 
+      "save-notion", "save-selection-notion", 
+      "github-comment",
+      "save-docs", "save-selection-docs", "share-discord",
+      "report-bug", "schedule-meeting", "log-page-sheets"
+    ];
     
     if (action.id === "generate-standup") {
       // Special standup flow
@@ -774,25 +1008,45 @@ Return ONLY the formatted standup message.
       let result;
       
       if (action.id === "email-page" || action.id === "email-quote") {
-        result = await GeminiClient.generateEmail(ctx);
+        result = await AIClient.generateEmail(ctx);
         generatedContent = result;
         showEmailForm(action, result);
       } else if (action.id === "summarize-slack" || action.id === "slack-quote") {
-        result = await GeminiClient.generateSlackMessage(ctx);
+        result = await AIClient.generateSlackMessage(ctx);
         generatedContent = result;
         showSlackForm(action, result);
       } else if (action.id === "save-notion" || action.id === "save-selection-notion") {
         // Generate a structured summary for Notion
         const content = ctx.hasSelection ? ctx.selectedText : ctx.pageContent?.substring(0, 3000);
         const prompt = `Summarize and structure this content for a Notion page. Include key points as bullet points:\n\n${content}`;
-        const summary = await GeminiClient.generateContent(prompt);
+        const summary = await AIClient.generateContent(prompt);
         generatedContent = { title: ctx.pageTitle, content: summary };
         showNotionForm(action, generatedContent);
       } else if (action.id === "github-comment") {
         const prompt = `Generate a helpful GitHub comment for: ${ctx.pageTitle}\n\n${ctx.hasSelection ? ctx.selectedText : ctx.pageContent?.substring(0, 1000)}`;
-        const comment = await GeminiClient.generateContent(prompt);
+        const comment = await AIClient.generateContent(prompt);
         generatedContent = { comment };
         showGitHubCommentForm(action, comment);
+      } else if (action.id === "save-docs" || action.id === "save-selection-docs") {
+        result = await AIClient.generateGoogleDoc(ctx);
+        generatedContent = result;
+        showGoogleDocsForm(action, result);
+      } else if (action.id === "share-discord") {
+        result = await AIClient.generateDiscordMessage(ctx);
+        generatedContent = result;
+        showDiscordForm(action, result);
+      } else if (action.id === "report-bug") {
+        result = await AIClient.generateLinearIssue(ctx);
+        generatedContent = result;
+        showLinearIssueForm(action, result);
+      } else if (action.id === "schedule-meeting") {
+        result = await AIClient.generateCalendarEvent(ctx);
+        generatedContent = result;
+        showCalendarEventForm(action, result);
+      } else if (action.id === "log-page-sheets") {
+        result = await AIClient.generateSheetData(ctx);
+        generatedContent = result;
+        showSheetsForm(action, result);
       }
     } catch (error) {
       showError(error.message);
@@ -985,6 +1239,320 @@ Return ONLY the formatted standup message.
     setupFormListeners(action);
   }
 
+  // ============================================================
+  // NEW INTEGRATION FORMS - Google Docs, Discord, Linear, Calendar, Sheets
+  // ============================================================
+
+  function showGoogleDocsForm(action, docData) {
+    currentView = "form";
+    const content = shadowRoot.getElementById("kn-content");
+    const footer = shadowRoot.getElementById("kn-footer");
+    footer.style.display = "";
+
+    content.innerHTML = `
+      <div class="kn-form-header">
+        <button class="kn-back-btn" id="kn-back">${icon("arrow-left", 16)}</button>
+        <div class="kn-action-icon-sm" style="background:${action.color};">${icon(action.icon, 16)}</div>
+        <span class="kn-form-title">${action.name}</span>
+        <span class="kn-ai-badge">${icon("sparkles", 12)} AI Structured</span>
+      </div>
+      <div class="kn-form-body">
+        <div class="kn-form-group">
+          <label class="kn-label">Document Title <span class="kn-ai-label">${icon("sparkles", 10)} AI</span></label>
+          <input type="text" class="kn-input" id="kn-field-doc-title" value="${escapeHtml(docData.title || '')}" data-field="docTitle" />
+        </div>
+        <div class="kn-form-group">
+          <label class="kn-label">Summary <span class="kn-ai-label">${icon("sparkles", 10)} AI</span></label>
+          <textarea class="kn-textarea" id="kn-field-doc-summary" rows="2" data-field="docSummary">${escapeHtml(docData.summary || '')}</textarea>
+        </div>
+        <div class="kn-form-group">
+          <label class="kn-label">Content <span class="kn-ai-label">${icon("sparkles", 10)} AI</span></label>
+          <textarea class="kn-textarea" id="kn-field-doc-content" rows="8" data-field="docContent">${escapeHtml(docData.content || '')}</textarea>
+        </div>
+      </div>
+      <div class="kn-form-actions">
+        <button class="kn-btn kn-btn-ghost" id="kn-regenerate">${icon("refresh", 14)} Regenerate</button>
+        <div style="display:flex;gap:10px;">
+          <button class="kn-btn kn-btn-ghost" id="kn-cancel">Cancel</button>
+          <button class="kn-btn kn-btn-primary" id="kn-submit">Create Document <kbd class="kn-kbd kn-kbd-sm">\u2318\u23CE</kbd></button>
+        </div>
+      </div>
+    `;
+
+    setupFormListeners(action);
+    setTimeout(() => shadowRoot.getElementById("kn-field-doc-title")?.focus(), 50);
+  }
+
+  function showDiscordForm(action, discordData) {
+    currentView = "form";
+    const content = shadowRoot.getElementById("kn-content");
+    const footer = shadowRoot.getElementById("kn-footer");
+    footer.style.display = "";
+
+    content.innerHTML = `
+      <div class="kn-form-header">
+        <button class="kn-back-btn" id="kn-back">${icon("arrow-left", 16)}</button>
+        <div class="kn-action-icon-sm" style="background:${action.color};">${icon(action.icon, 16)}</div>
+        <span class="kn-form-title">${action.name}</span>
+        <span class="kn-ai-badge">${icon("sparkles", 12)} AI Generated</span>
+      </div>
+      <div class="kn-form-body">
+        <div class="kn-form-group">
+          <label class="kn-label">Suggested Channel</label>
+          <input type="text" class="kn-input" id="kn-field-discord-channel" value="${escapeHtml('#' + (discordData.suggestedChannel || 'general'))}" data-field="discordChannel" />
+        </div>
+        <div class="kn-form-group">
+          <label class="kn-label">Message <span class="kn-ai-label">${icon("sparkles", 10)} AI</span></label>
+          <textarea class="kn-textarea" id="kn-field-discord-message" rows="10" data-field="discordMessage">${escapeHtml(discordData.message || '')}</textarea>
+        </div>
+      </div>
+      <div class="kn-form-actions">
+        <button class="kn-btn kn-btn-ghost" id="kn-regenerate">${icon("refresh", 14)} Regenerate</button>
+        <div style="display:flex;gap:10px;">
+          <button class="kn-btn kn-btn-ghost" id="kn-cancel">Cancel</button>
+          <button class="kn-btn kn-btn-primary" id="kn-submit">Send to Discord <kbd class="kn-kbd kn-kbd-sm">\u2318\u23CE</kbd></button>
+        </div>
+      </div>
+    `;
+
+    setupFormListeners(action);
+    setTimeout(() => shadowRoot.getElementById("kn-field-discord-message")?.focus(), 50);
+  }
+
+  // Store Linear data
+  let linearTeams = [];
+  let linearLabels = [];
+  let selectedLinearTeam = null;
+
+  function showLinearIssueForm(action, issueData) {
+    currentView = "form";
+    const content = shadowRoot.getElementById("kn-content");
+    const footer = shadowRoot.getElementById("kn-footer");
+    footer.style.display = "";
+
+    // Fetch Linear teams in background
+    sendMessageToBackground({ action: "fetchLinearTeams" }).then(result => {
+      linearTeams = result.teams || [];
+      if (linearTeams.length > 0) {
+        selectedLinearTeam = linearTeams[0];
+        updateLinearTeamSelector();
+      }
+    });
+
+    const priorityOptions = [
+      { value: 0, label: "No priority" },
+      { value: 1, label: "Urgent" },
+      { value: 2, label: "High" },
+      { value: 3, label: "Medium" },
+      { value: 4, label: "Low" }
+    ];
+
+    content.innerHTML = `
+      <div class="kn-form-header">
+        <button class="kn-back-btn" id="kn-back">${icon("arrow-left", 16)}</button>
+        <div class="kn-action-icon-sm" style="background:${action.color};">${icon(action.icon, 16)}</div>
+        <span class="kn-form-title">${action.name}</span>
+        <span class="kn-ai-badge">${icon("sparkles", 12)} AI Generated</span>
+      </div>
+      <div class="kn-form-body">
+        <div class="kn-form-group">
+          <label class="kn-label">Team</label>
+          <select class="kn-input" id="kn-linear-team" data-field="linearTeam">
+            <option value="">Loading teams...</option>
+          </select>
+        </div>
+        <div class="kn-form-group">
+          <label class="kn-label">Title <span class="kn-ai-label">${icon("sparkles", 10)} AI</span></label>
+          <input type="text" class="kn-input" id="kn-field-linear-title" value="${escapeHtml(issueData.title || '')}" data-field="linearTitle" />
+        </div>
+        <div class="kn-form-group">
+          <label class="kn-label">Description <span class="kn-ai-label">${icon("sparkles", 10)} AI</span></label>
+          <textarea class="kn-textarea" id="kn-field-linear-desc" rows="6" data-field="linearDescription">${escapeHtml(issueData.description || '')}</textarea>
+        </div>
+        <div class="kn-form-row">
+          <div class="kn-form-group" style="flex:1;">
+            <label class="kn-label">Priority</label>
+            <select class="kn-input" id="kn-field-linear-priority" data-field="linearPriority">
+              ${priorityOptions.map(p => `<option value="${p.value}" ${issueData.priority === p.value ? 'selected' : ''}>${p.label}</option>`).join('')}
+            </select>
+          </div>
+          <div class="kn-form-group" style="flex:1;">
+            <label class="kn-label">Labels</label>
+            <input type="text" class="kn-input" id="kn-field-linear-labels" value="${escapeHtml((issueData.labels || []).join(', '))}" placeholder="bug, feature" data-field="linearLabels" />
+          </div>
+        </div>
+      </div>
+      <div class="kn-form-actions">
+        <button class="kn-btn kn-btn-ghost" id="kn-regenerate">${icon("refresh", 14)} Regenerate</button>
+        <div style="display:flex;gap:10px;">
+          <button class="kn-btn kn-btn-ghost" id="kn-cancel">Cancel</button>
+          <button class="kn-btn kn-btn-primary" id="kn-submit">Create Issue <kbd class="kn-kbd kn-kbd-sm">\u2318\u23CE</kbd></button>
+        </div>
+      </div>
+    `;
+
+    // Listen for team selection
+    shadowRoot.getElementById("kn-linear-team")?.addEventListener("change", (e) => {
+      const selected = linearTeams.find(t => t.id === e.target.value);
+      if (selected) selectedLinearTeam = selected;
+    });
+
+    setupFormListeners(action);
+    setTimeout(() => shadowRoot.getElementById("kn-field-linear-title")?.focus(), 50);
+  }
+
+  function updateLinearTeamSelector() {
+    const select = shadowRoot.getElementById("kn-linear-team");
+    if (!select) return;
+
+    if (linearTeams.length === 0) {
+      select.innerHTML = `<option value="">No teams found</option>`;
+      return;
+    }
+
+    select.innerHTML = linearTeams.map(t => 
+      `<option value="${t.id}" ${selectedLinearTeam?.id === t.id ? 'selected' : ''}>${escapeHtml(t.name)} (${t.key})</option>`
+    ).join('');
+  }
+
+  function showCalendarEventForm(action, eventData) {
+    currentView = "form";
+    const content = shadowRoot.getElementById("kn-content");
+    const footer = shadowRoot.getElementById("kn-footer");
+    footer.style.display = "";
+
+    // Format date for input
+    const startDate = eventData.startTime ? new Date(eventData.startTime) : new Date();
+    const formattedDate = startDate.toISOString().slice(0, 16);
+
+    content.innerHTML = `
+      <div class="kn-form-header">
+        <button class="kn-back-btn" id="kn-back">${icon("arrow-left", 16)}</button>
+        <div class="kn-action-icon-sm" style="background:${action.color};">${icon(action.icon, 16)}</div>
+        <span class="kn-form-title">${action.name}</span>
+        <span class="kn-ai-badge">${icon("sparkles", 12)} AI Extracted</span>
+      </div>
+      <div class="kn-form-body">
+        <div class="kn-form-group">
+          <label class="kn-label">Event Title <span class="kn-ai-label">${icon("sparkles", 10)} AI</span></label>
+          <input type="text" class="kn-input" id="kn-field-event-title" value="${escapeHtml(eventData.title || '')}" data-field="eventTitle" />
+        </div>
+        <div class="kn-form-row">
+          <div class="kn-form-group" style="flex:1;">
+            <label class="kn-label">Start Time</label>
+            <input type="datetime-local" class="kn-input" id="kn-field-event-start" value="${formattedDate}" data-field="eventStart" />
+          </div>
+          <div class="kn-form-group" style="flex:0.5;">
+            <label class="kn-label">Duration (min)</label>
+            <input type="number" class="kn-input" id="kn-field-event-duration" value="${eventData.duration || 30}" min="15" step="15" data-field="eventDuration" />
+          </div>
+        </div>
+        <div class="kn-form-group">
+          <label class="kn-label">Description <span class="kn-ai-label">${icon("sparkles", 10)} AI</span></label>
+          <textarea class="kn-textarea" id="kn-field-event-desc" rows="3" data-field="eventDescription">${escapeHtml(eventData.description || '')}</textarea>
+        </div>
+        <div class="kn-form-group">
+          <label class="kn-label">Attendees (comma-separated emails)</label>
+          <input type="text" class="kn-input" id="kn-field-event-attendees" value="${escapeHtml((eventData.attendees || []).join(', '))}" placeholder="email@example.com" data-field="eventAttendees" />
+        </div>
+      </div>
+      <div class="kn-form-actions">
+        <button class="kn-btn kn-btn-ghost" id="kn-regenerate">${icon("refresh", 14)} Regenerate</button>
+        <div style="display:flex;gap:10px;">
+          <button class="kn-btn kn-btn-ghost" id="kn-cancel">Cancel</button>
+          <button class="kn-btn kn-btn-primary" id="kn-submit">Create Event <kbd class="kn-kbd kn-kbd-sm">\u2318\u23CE</kbd></button>
+        </div>
+      </div>
+    `;
+
+    setupFormListeners(action);
+    setTimeout(() => shadowRoot.getElementById("kn-field-event-title")?.focus(), 50);
+  }
+
+  // Store sheets list
+  let spreadsheets = [];
+  let selectedSpreadsheet = null;
+
+  function showSheetsForm(action, sheetData) {
+    currentView = "form";
+    const content = shadowRoot.getElementById("kn-content");
+    const footer = shadowRoot.getElementById("kn-footer");
+    footer.style.display = "";
+
+    // Fetch spreadsheets in background
+    sendMessageToBackground({ action: "fetchSpreadsheets" }).then(result => {
+      spreadsheets = result.spreadsheets || [];
+      if (spreadsheets.length > 0) {
+        selectedSpreadsheet = spreadsheets[0];
+        updateSpreadsheetsSelector();
+      }
+    });
+
+    const fields = sheetData.fields || ["Date", "Title", "URL", "Notes"];
+    const values = sheetData.values || [];
+
+    content.innerHTML = `
+      <div class="kn-form-header">
+        <button class="kn-back-btn" id="kn-back">${icon("arrow-left", 16)}</button>
+        <div class="kn-action-icon-sm" style="background:${action.color};">${icon(action.icon, 16)}</div>
+        <span class="kn-form-title">${action.name}</span>
+        <span class="kn-ai-badge">${icon("sparkles", 12)} AI Extracted</span>
+      </div>
+      <div class="kn-form-body">
+        <div class="kn-form-group">
+          <label class="kn-label">Spreadsheet</label>
+          <select class="kn-input" id="kn-sheets-selector" data-field="spreadsheetId">
+            <option value="">Loading spreadsheets...</option>
+          </select>
+        </div>
+        <div class="kn-form-group">
+          <label class="kn-label">Sheet Name</label>
+          <input type="text" class="kn-input" id="kn-field-sheet-name" value="Sheet1" data-field="sheetName" />
+        </div>
+        <div class="kn-form-group">
+          <label class="kn-label">Data to Log <span class="kn-ai-label">${icon("sparkles", 10)} AI</span></label>
+          <div class="kn-sheet-preview">
+            ${fields.map((field, i) => `
+              <div class="kn-sheet-row">
+                <label class="kn-sheet-label">${escapeHtml(field)}</label>
+                <input type="text" class="kn-input" value="${escapeHtml(values[i] || '')}" data-sheet-value="${i}" />
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      </div>
+      <div class="kn-form-actions">
+        <button class="kn-btn kn-btn-ghost" id="kn-regenerate">${icon("refresh", 14)} Regenerate</button>
+        <div style="display:flex;gap:10px;">
+          <button class="kn-btn kn-btn-ghost" id="kn-cancel">Cancel</button>
+          <button class="kn-btn kn-btn-primary" id="kn-submit">Log to Sheet <kbd class="kn-kbd kn-kbd-sm">\u2318\u23CE</kbd></button>
+        </div>
+      </div>
+    `;
+
+    // Listen for spreadsheet selection
+    shadowRoot.getElementById("kn-sheets-selector")?.addEventListener("change", (e) => {
+      const selected = spreadsheets.find(s => s.id === e.target.value);
+      if (selected) selectedSpreadsheet = selected;
+    });
+
+    setupFormListeners(action);
+  }
+
+  function updateSpreadsheetsSelector() {
+    const select = shadowRoot.getElementById("kn-sheets-selector");
+    if (!select) return;
+
+    if (spreadsheets.length === 0) {
+      select.innerHTML = `<option value="">No spreadsheets found</option>`;
+      return;
+    }
+
+    select.innerHTML = spreadsheets.map(s => 
+      `<option value="${s.id}" ${selectedSpreadsheet?.id === s.id ? 'selected' : ''}>${escapeHtml(s.name)}</option>`
+    ).join('');
+  }
+
   function showRegularForm(action) {
     currentView = "form";
     const content = shadowRoot.getElementById("kn-content");
@@ -1028,6 +1596,81 @@ Return ONLY the formatted standup message.
         <div class="kn-form-group">
           <label class="kn-label">Content</label>
           <textarea class="kn-textarea" id="kn-field-content" rows="6" placeholder="Page content..." data-field="content"></textarea>
+        </div>
+      `;
+    } else if (action.id === "send-discord") {
+      fieldsHtml = `
+        <div class="kn-form-group">
+          <label class="kn-label">Channel</label>
+          <input type="text" class="kn-input" id="kn-field-discord-channel" placeholder="#general" data-field="discordChannel" />
+        </div>
+        <div class="kn-form-group">
+          <label class="kn-label">Message</label>
+          <textarea class="kn-textarea" id="kn-field-discord-message" rows="6" placeholder="Write your message..." data-field="discordMessage"></textarea>
+        </div>
+      `;
+    } else if (action.id === "create-doc") {
+      fieldsHtml = `
+        <div class="kn-form-group">
+          <label class="kn-label">Document Title</label>
+          <input type="text" class="kn-input" id="kn-field-doc-title" placeholder="Document title" data-field="docTitle" />
+        </div>
+        <div class="kn-form-group">
+          <label class="kn-label">Content</label>
+          <textarea class="kn-textarea" id="kn-field-doc-content" rows="6" placeholder="Document content..." data-field="docContent"></textarea>
+        </div>
+      `;
+    } else if (action.id === "create-event") {
+      const now = new Date();
+      const formattedDate = now.toISOString().slice(0, 16);
+      fieldsHtml = `
+        <div class="kn-form-group">
+          <label class="kn-label">Event Title</label>
+          <input type="text" class="kn-input" id="kn-field-event-title" placeholder="Meeting title" data-field="eventTitle" />
+        </div>
+        <div class="kn-form-row" style="display:flex;gap:10px;">
+          <div class="kn-form-group" style="flex:1;">
+            <label class="kn-label">Start Time</label>
+            <input type="datetime-local" class="kn-input" id="kn-field-event-start" value="${formattedDate}" data-field="eventStart" />
+          </div>
+          <div class="kn-form-group" style="flex:0.5;">
+            <label class="kn-label">Duration (min)</label>
+            <input type="number" class="kn-input" id="kn-field-event-duration" value="30" min="15" step="15" data-field="eventDuration" />
+          </div>
+        </div>
+        <div class="kn-form-group">
+          <label class="kn-label">Description</label>
+          <textarea class="kn-textarea" id="kn-field-event-desc" rows="3" placeholder="Meeting agenda..." data-field="eventDescription"></textarea>
+        </div>
+      `;
+    } else if (action.id === "log-sheets") {
+      fieldsHtml = `
+        <div class="kn-form-group">
+          <label class="kn-label">Spreadsheet ID</label>
+          <input type="text" class="kn-input" id="kn-field-spreadsheet-id" placeholder="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms" data-field="spreadsheetId" />
+        </div>
+        <div class="kn-form-group">
+          <label class="kn-label">Sheet Name</label>
+          <input type="text" class="kn-input" id="kn-field-sheet-name" value="Sheet1" data-field="sheetName" />
+        </div>
+        <div class="kn-form-group">
+          <label class="kn-label">Values (comma-separated)</label>
+          <input type="text" class="kn-input" id="kn-field-sheet-values" placeholder="Value1, Value2, Value3" data-field="sheetValues" />
+        </div>
+      `;
+    } else if (action.id === "create-linear-issue") {
+      fieldsHtml = `
+        <div class="kn-form-group">
+          <label class="kn-label">Title</label>
+          <input type="text" class="kn-input" id="kn-field-linear-title" placeholder="Issue title" data-field="linearTitle" />
+        </div>
+        <div class="kn-form-group">
+          <label class="kn-label">Description</label>
+          <textarea class="kn-textarea" id="kn-field-linear-desc" rows="4" placeholder="Issue description..." data-field="linearDescription"></textarea>
+        </div>
+        <div class="kn-form-group">
+          <label class="kn-label">Priority (0-4, 0=none, 1=urgent)</label>
+          <input type="number" class="kn-input" id="kn-field-linear-priority" value="3" min="0" max="4" data-field="linearPriority" />
         </div>
       `;
     } else {
@@ -1092,7 +1735,7 @@ Return ONLY the formatted standup message.
     `;
 
     try {
-      const tasks = await GeminiClient.extractTasks(ctx.selectedText);
+      const tasks = await AIClient.extractTasks(ctx.selectedText);
       generatedContent = tasks;
       showExtractedTasksForm(tasks);
     } catch (error) {
@@ -1436,7 +2079,7 @@ Return ONLY the formatted standup message.
       const selectedTasks = standupData.selectedTasks.map(i => standupData.tasks[i]);
       const selectedMeetings = standupData.selectedMeetings.map(i => standupData.meetings[i]);
 
-      const message = await GeminiClient.generateStandup(selectedCommits, selectedTasks, selectedMeetings, standupData.blockers);
+      const message = await AIClient.generateStandup(selectedCommits, selectedTasks, selectedMeetings, standupData.blockers);
       generatedContent = { standup: message };
       showStandupEditor(message);
     } catch (error) {
@@ -1596,9 +2239,201 @@ Return ONLY the formatted standup message.
       }
       return;
     }
+
+    // Google Docs actions - create document via server API
+    if (actionId === "save-docs" || actionId === "save-selection-docs" || actionId === "create-doc") {
+      const title = data.docTitle || 'Untitled Document';
+      const summary = data.docSummary || '';
+      const content = data.docContent || '';
+      const fullContent = summary ? `${summary}\n\n${content}` : content;
+      
+      showLoadingState("Creating Google Doc...");
+      
+      try {
+        const response = await sendMessageToBackground({
+          action: "createGoogleDoc",
+          title: title,
+          content: fullContent
+        });
+        
+        if (response.error) {
+          showError(response.error);
+        } else {
+          showSuccess(currentAction, { 
+            sent: true, 
+            content: `Document "${title}" created!`,
+            url: response.url
+          });
+        }
+      } catch (error) {
+        showError(error.message);
+      }
+      return;
+    }
+
+    // Discord actions - send via webhook
+    if (actionId === "share-discord" || actionId === "send-discord") {
+      const message = data.discordMessage?.trim();
+      
+      if (!message) {
+        showError("Please enter a message");
+        return;
+      }
+      
+      showLoadingState("Posting to Discord...");
+      
+      try {
+        const response = await sendMessageToBackground({
+          action: "sendDiscord",
+          message: message
+        });
+        
+        if (response.error) {
+          showError(response.error);
+        } else {
+          showSuccess(currentAction, { sent: true, content: "Message posted to Discord!" });
+        }
+      } catch (error) {
+        showError(error.message);
+      }
+      return;
+    }
+
+    // Linear actions - create issue via server API
+    if (actionId === "report-bug" || actionId === "create-linear-issue") {
+      const title = data.linearTitle?.trim();
+      const description = data.linearDescription || '';
+      const priority = parseInt(data.linearPriority) || 3;
+      const labels = data.linearLabels ? data.linearLabels.split(',').map(l => l.trim()).filter(l => l) : [];
+      
+      if (!title) {
+        showError("Please enter an issue title");
+        return;
+      }
+      
+      showLoadingState("Creating Linear issue...");
+      
+      try {
+        const response = await sendMessageToBackground({
+          action: "createLinearIssue",
+          title: title,
+          description: description,
+          teamId: selectedLinearTeam?.id,
+          priority: priority,
+          labels: labels
+        });
+        
+        if (response.error) {
+          showError(response.error);
+        } else {
+          showSuccess(currentAction, { 
+            sent: true, 
+            content: `Issue "${response.identifier || title}" created in Linear!`,
+            url: response.url
+          });
+        }
+      } catch (error) {
+        showError(error.message);
+      }
+      return;
+    }
+
+    // Calendar actions - create event via server API
+    if (actionId === "schedule-meeting" || actionId === "create-event") {
+      const title = data.eventTitle?.trim();
+      const startTime = data.eventStart;
+      const duration = parseInt(data.eventDuration) || 30;
+      const description = data.eventDescription || '';
+      const attendees = data.eventAttendees ? data.eventAttendees.split(',').map(e => e.trim()).filter(e => e.includes('@')) : [];
+      
+      if (!title) {
+        showError("Please enter an event title");
+        return;
+      }
+      
+      if (!startTime) {
+        showError("Please select a start time");
+        return;
+      }
+      
+      // Calculate end time
+      const startDate = new Date(startTime);
+      const endDate = new Date(startDate.getTime() + duration * 60 * 1000);
+      
+      showLoadingState("Creating calendar event...");
+      
+      try {
+        const response = await sendMessageToBackground({
+          action: "createCalendarEvent",
+          title: title,
+          description: description,
+          startTime: startDate.toISOString(),
+          endTime: endDate.toISOString(),
+          attendees: attendees
+        });
+        
+        if (response.error) {
+          showError(response.error);
+        } else {
+          showSuccess(currentAction, { 
+            sent: true, 
+            content: `Event "${title}" created!`,
+            url: response.htmlLink
+          });
+        }
+      } catch (error) {
+        showError(error.message);
+      }
+      return;
+    }
+
+    // Sheets actions - append row via server API
+    if (actionId === "log-page-sheets" || actionId === "log-sheets") {
+      const spreadsheetId = data.spreadsheetId || selectedSpreadsheet?.id;
+      const sheetName = data.sheetName || 'Sheet1';
+      
+      // Collect sheet values
+      const sheetValueInputs = shadowRoot.querySelectorAll("[data-sheet-value]");
+      let values = [];
+      if (sheetValueInputs.length > 0) {
+        sheetValueInputs.forEach(el => values.push(el.value));
+      } else if (data.sheetValues) {
+        values = data.sheetValues.split(',').map(v => v.trim());
+      }
+      
+      if (!spreadsheetId) {
+        showError("Please select or enter a spreadsheet ID");
+        return;
+      }
+      
+      if (values.length === 0) {
+        showError("Please enter values to log");
+        return;
+      }
+      
+      showLoadingState("Logging to Google Sheets...");
+      
+      try {
+        const response = await sendMessageToBackground({
+          action: "appendSheetRow",
+          spreadsheetId: spreadsheetId,
+          sheetName: sheetName,
+          values: values
+        });
+        
+        if (response.error) {
+          showError(response.error);
+        } else {
+          showSuccess(currentAction, { sent: true, content: "Data logged to spreadsheet!" });
+        }
+      } catch (error) {
+        showError(error.message);
+      }
+      return;
+    }
     
     // For other actions (GitHub comment, etc.) - copy to clipboard
-    const textToCopy = data.body || data.message || data.comment || data.content || '';
+    const textToCopy = data.body || data.message || data.comment || data.content || data.docContent || data.discordMessage || '';
     if (textToCopy) {
       navigator.clipboard.writeText(textToCopy).then(() => {
         showSuccess(currentAction, { copied: true, content: textToCopy.substring(0, 100) + '...' });
@@ -1640,8 +2475,15 @@ Return ONLY the formatted standup message.
       "summarize-slack": ["Reading article", "Extracting key points", "Formatting for Slack"],
       "slack-quote": ["Processing selection", "Creating summary", "Adding emojis"],
       "save-notion": ["Analyzing content", "Structuring page", "Preparing save"],
+      "save-selection-notion": ["Processing selection", "Structuring content", "Preparing save"],
       "extract-tasks": ["Scanning content", "Finding action items", "Assigning priorities"],
       "github-comment": ["Reading context", "Analyzing code", "Writing comment"],
+      "save-docs": ["Reading article", "Structuring content", "Formatting for Docs"],
+      "save-selection-docs": ["Processing selection", "Creating document", "Formatting"],
+      "share-discord": ["Reading content", "Creating summary", "Adding Discord flair"],
+      "report-bug": ["Analyzing error", "Creating description", "Setting priority"],
+      "schedule-meeting": ["Parsing text", "Extracting date/time", "Creating event details"],
+      "log-page-sheets": ["Reading page", "Extracting data", "Structuring for spreadsheet"],
     };
     return map[actionId] || ["Processing", "Analyzing", "Generating"];
   }
@@ -1722,46 +2564,61 @@ Return ONLY the formatted standup message.
       </div>
       <div class="kn-form-body">
         <div class="kn-settings-section">
-          <div class="kn-settings-title">${icon("sparkles", 14)} AI Configuration</div>
+          <div class="kn-settings-title">${icon("sparkles", 14)} AI (Claude)</div>
           <div class="kn-form-group">
-            <label class="kn-label">Gemini API Key</label>
-            <input type="password" class="kn-input" id="kn-api-key" placeholder="Enter your Gemini API key" />
-            <div class="kn-hint">Get from <a href="https://aistudio.google.com/apikey" target="_blank" style="color:#8B5CF6;">Google AI Studio</a></div>
+            <label class="kn-label">Claude API Key</label>
+            <input type="password" class="kn-input" id="kn-claude-key" placeholder="sk-ant-xxxxx" />
+            <div class="kn-hint">Get from <a href="https://console.anthropic.com/settings/keys" target="_blank" style="color:#8B5CF6;">Anthropic Console</a></div>
           </div>
           <button class="kn-btn kn-btn-ghost" id="kn-test-ai" style="margin-top:8px;">Test Connection</button>
-          <div class="kn-status" id="kn-ai-status" style="margin-top:10px;">Checking...</div>
+          <div class="kn-status" id="kn-ai-status" style="margin-top:10px;">Not configured</div>
+        </div>
+
+        <div class="kn-settings-section">
+          <div class="kn-settings-title">${icon("cloud", 14)} Server URL (Optional)</div>
+          <div class="kn-form-group">
+            <label class="kn-label">Replit App URL</label>
+            <input type="text" class="kn-input" id="kn-server-url" placeholder="https://your-app.replit.app" />
+            <div class="kn-hint">Optional. For action logging and analytics.</div>
+          </div>
         </div>
         
         <div class="kn-settings-section">
-          <div class="kn-settings-title">${icon("mail", 14)} Google Integration (Gmail + Calendar)</div>
+          <div class="kn-settings-title">${icon("mail", 14)} Google (Gmail, Calendar, Docs, Sheets, Drive)</div>
           <div class="kn-form-group">
             <label class="kn-label">OAuth Client ID</label>
             <input type="text" class="kn-input" id="kn-oauth-client-id" placeholder="xxxxxxxxxx.apps.googleusercontent.com" />
-            <div class="kn-hint">Create OAuth credentials in <a href="https://console.cloud.google.com/apis/credentials" target="_blank" style="color:#8B5CF6;">Google Cloud Console</a>. Enable Gmail & Calendar APIs.</div>
+            <div class="kn-hint">Create at <a href="https://console.cloud.google.com/apis/credentials" target="_blank" style="color:#8B5CF6;">Google Cloud Console</a>. Add redirect URI shown below.</div>
           </div>
-          <div style="display:flex;gap:10px;margin-top:8px;">
-            <button class="kn-btn kn-btn-ghost" id="kn-connect-gmail">Connect Gmail</button>
-            <button class="kn-btn kn-btn-ghost" id="kn-connect-calendar">Connect Calendar</button>
-          </div>
-          <div class="kn-status" id="kn-gmail-status" style="margin-top:10px;">Gmail: Not connected</div>
-          <div class="kn-status" id="kn-calendar-status" style="margin-top:6px;">Calendar: Not connected</div>
+          <button class="kn-btn kn-btn-primary" id="kn-connect-google" style="margin-top:8px;">Connect Google Account</button>
+          <div class="kn-status" id="kn-google-status" style="margin-top:10px;">Not connected</div>
+          <div class="kn-hint" style="margin-top:8px;font-size:11px;opacity:0.7;">Redirect URI: <code style="background:rgba(0,0,0,0.3);padding:2px 6px;border-radius:4px;">${typeof chrome !== 'undefined' && chrome.identity ? chrome.identity.getRedirectURL() : 'chrome-extension://YOUR_ID/...'}</code></div>
         </div>
         
         <div class="kn-settings-section">
-          <div class="kn-settings-title">${icon("message-circle", 14)} Slack Integration</div>
+          <div class="kn-settings-title">${icon("hash", 14)} Slack</div>
           <div class="kn-form-group">
             <label class="kn-label">Webhook URL</label>
             <input type="text" class="kn-input" id="kn-slack-webhook" placeholder="https://hooks.slack.com/services/..." />
             <div class="kn-hint">Create at <a href="https://api.slack.com/messaging/webhooks" target="_blank" style="color:#8B5CF6;">Slack Incoming Webhooks</a></div>
           </div>
         </div>
+
+        <div class="kn-settings-section">
+          <div class="kn-settings-title">${icon("message-circle", 14)} Discord</div>
+          <div class="kn-form-group">
+            <label class="kn-label">Webhook URL</label>
+            <input type="text" class="kn-input" id="kn-discord-webhook" placeholder="https://discord.com/api/webhooks/..." />
+            <div class="kn-hint">Server Settings → Integrations → Webhooks → New Webhook</div>
+          </div>
+        </div>
         
         <div class="kn-settings-section">
-          <div class="kn-settings-title">${icon("git-branch", 14)} GitHub Integration</div>
+          <div class="kn-settings-title">${icon("git-branch", 14)} GitHub</div>
           <div class="kn-form-group">
             <label class="kn-label">Personal Access Token</label>
             <input type="password" class="kn-input" id="kn-github-token" placeholder="ghp_xxxxxxxxxxxx" />
-            <div class="kn-hint">Create at <a href="https://github.com/settings/tokens" target="_blank" style="color:#8B5CF6;">GitHub Settings</a></div>
+            <div class="kn-hint">Create at <a href="https://github.com/settings/tokens" target="_blank" style="color:#8B5CF6;">GitHub Settings</a> with repo read access</div>
           </div>
           <div class="kn-form-group">
             <label class="kn-label">Username</label>
@@ -1770,42 +2627,53 @@ Return ONLY the formatted standup message.
         </div>
         
         <div class="kn-settings-section">
-          <div class="kn-settings-title">${icon("file-text", 14)} Notion Integration</div>
+          <div class="kn-settings-title">${icon("file-text", 14)} Notion</div>
           <div class="kn-form-group">
             <label class="kn-label">Integration Token</label>
             <input type="password" class="kn-input" id="kn-notion-token" placeholder="secret_xxxxxxxxxxxx" />
-            <div class="kn-hint">Create at <a href="https://www.notion.so/my-integrations" target="_blank" style="color:#8B5CF6;">Notion Integrations</a></div>
+            <div class="kn-hint">Create at <a href="https://www.notion.so/my-integrations" target="_blank" style="color:#8B5CF6;">Notion Integrations</a> and share pages with it</div>
+          </div>
+        </div>
+
+        <div class="kn-settings-section">
+          <div class="kn-settings-title">${icon("zap", 14)} Linear</div>
+          <div class="kn-form-group">
+            <label class="kn-label">API Key</label>
+            <input type="password" class="kn-input" id="kn-linear-api-key" placeholder="lin_api_xxxxxxxxxxxx" />
+            <div class="kn-hint">Create at <a href="https://linear.app/settings/api" target="_blank" style="color:#8B5CF6;">Linear Settings → API</a></div>
           </div>
         </div>
       </div>
       <div class="kn-form-actions">
         <button class="kn-btn kn-btn-ghost" id="kn-cancel">Cancel</button>
-        <button class="kn-btn kn-btn-primary" id="kn-save-settings">Save Settings</button>
+        <button type="button" class="kn-btn kn-btn-primary" id="kn-save-settings">Save Settings</button>
       </div>
     `;
 
     shadowRoot.getElementById("kn-back")?.addEventListener("click", showPalette);
     shadowRoot.getElementById("kn-cancel")?.addEventListener("click", showPalette);
     
-    // Test AI connection
+    // Test AI connection (Claude)
     shadowRoot.getElementById("kn-test-ai")?.addEventListener("click", async () => {
-      const apiKey = shadowRoot.getElementById("kn-api-key").value.trim();
       const statusEl = shadowRoot.getElementById("kn-ai-status");
+      const apiKey = shadowRoot.getElementById("kn-claude-key").value.trim();
+      
       if (!apiKey) {
-        statusEl.innerHTML = `<span style="color:#F59E0B;">Enter an API key first</span>`;
+        statusEl.innerHTML = `<span style="color:#F59E0B;">Enter your Claude API key first</span>`;
         return;
       }
-      statusEl.innerHTML = `<span style="color:#8B5CF6;">Testing...</span>`;
-      const result = await GeminiClient.testConnection(apiKey);
+      
+      statusEl.innerHTML = `<span style="color:#8B5CF6;">Testing Claude...</span>`;
+      const result = await AIClient.testConnection(apiKey);
       statusEl.innerHTML = result.success 
-        ? `<span style="color:#10B981;">Connected!</span>` 
+        ? `<span style="color:#10B981;">Claude connected!</span>` 
         : `<span style="color:#EF4444;">${result.error}</span>`;
     });
     
-    // Connect Gmail
-    shadowRoot.getElementById("kn-connect-gmail")?.addEventListener("click", async () => {
+    // Connect Google (unified OAuth for Gmail, Calendar, Docs, Sheets, Drive)
+    shadowRoot.getElementById("kn-connect-google")?.addEventListener("click", async () => {
       const clientId = shadowRoot.getElementById("kn-oauth-client-id").value.trim();
-      const statusEl = shadowRoot.getElementById("kn-gmail-status");
+      const statusEl = shadowRoot.getElementById("kn-google-status");
       
       if (!clientId) {
         statusEl.innerHTML = `<span style="color:#F59E0B;">Enter OAuth Client ID first</span>`;
@@ -1818,94 +2686,98 @@ Return ONLY the formatted standup message.
       statusEl.innerHTML = `<span style="color:#8B5CF6;">Connecting...</span>`;
       
       try {
-        const response = await sendMessageToBackground({ action: "gmailAuth" });
+        const response = await sendMessageToBackground({ action: "googleAuth" });
         if (response.error) {
           statusEl.innerHTML = `<span style="color:#EF4444;">${response.error}</span>`;
         } else {
-          statusEl.innerHTML = `<span style="color:#10B981;">Gmail: Connected!</span>`;
+          statusEl.innerHTML = `<span style="color:#10B981;">Connected! Gmail, Calendar, Docs, Sheets, Drive ready.</span>`;
         }
       } catch (error) {
         statusEl.innerHTML = `<span style="color:#EF4444;">${error.message}</span>`;
       }
     });
-    
-    // Connect Calendar
-    shadowRoot.getElementById("kn-connect-calendar")?.addEventListener("click", async () => {
-      const clientId = shadowRoot.getElementById("kn-oauth-client-id").value.trim();
-      const statusEl = shadowRoot.getElementById("kn-calendar-status");
-      
-      if (!clientId) {
-        statusEl.innerHTML = `<span style="color:#F59E0B;">Enter OAuth Client ID first</span>`;
-        return;
-      }
-      
-      // Save client ID first
-      chrome.storage.local.set({ oauth_client_id: clientId });
-      
-      statusEl.innerHTML = `<span style="color:#8B5CF6;">Connecting...</span>`;
-      
-      try {
-        const response = await sendMessageToBackground({ action: "calendarConnect" });
-        if (response.error) {
-          statusEl.innerHTML = `<span style="color:#EF4444;">${response.error}</span>`;
-        } else {
-          statusEl.innerHTML = `<span style="color:#10B981;">Calendar: Connected!</span>`;
-        }
-      } catch (error) {
-        statusEl.innerHTML = `<span style="color:#EF4444;">${error.message}</span>`;
-      }
-    });
-    
+
     // Save all settings
     shadowRoot.getElementById("kn-save-settings")?.addEventListener("click", async () => {
-      const apiKey = shadowRoot.getElementById("kn-api-key").value.trim();
+      const serverUrl = shadowRoot.getElementById("kn-server-url").value.trim();
+      const claudeKeyInput = shadowRoot.getElementById("kn-claude-key");
+      const claudeKey = (claudeKeyInput && claudeKeyInput.value) ? claudeKeyInput.value.trim() : '';
       const oauthClientId = shadowRoot.getElementById("kn-oauth-client-id").value.trim();
       const slackWebhook = shadowRoot.getElementById("kn-slack-webhook").value.trim();
+      const discordWebhook = shadowRoot.getElementById("kn-discord-webhook").value.trim();
       const githubToken = shadowRoot.getElementById("kn-github-token").value.trim();
       const githubUsername = shadowRoot.getElementById("kn-github-username").value.trim();
       const notionToken = shadowRoot.getElementById("kn-notion-token").value.trim();
+      const linearApiKey = shadowRoot.getElementById("kn-linear-api-key").value.trim();
       
-      const settings = {};
-      if (apiKey) settings.gemini_api_key = apiKey;
-      if (oauthClientId) settings.oauth_client_id = oauthClientId;
-      if (slackWebhook) settings.slack_webhook_url = slackWebhook;
-      if (githubToken) settings.github_token = githubToken;
-      if (githubUsername) settings.github_username = githubUsername;
-      if (notionToken) settings.notion_token = notionToken;
-      
-      chrome.storage.local.set(settings, () => {
-        showPalette();
+      // Get existing storage so we never overwrite Claude key with empty by mistake
+      chrome.storage.local.get(['claude_api_key'], (existing) => {
+        const prevClaude = (existing && existing.claude_api_key) ? existing.claude_api_key : '';
+        const settings = {
+          claude_api_key: claudeKey.length > 0 ? claudeKey : prevClaude,
+          serverUrl: serverUrl || '',
+          oauth_client_id: oauthClientId || '',
+          slack_webhook_url: slackWebhook || '',
+          discord_webhook_url: discordWebhook || '',
+          github_token: githubToken || '',
+          github_username: githubUsername || '',
+          notion_token: notionToken || '',
+          linear_api_key: linearApiKey || ''
+        };
+        
+        chrome.storage.local.set(settings, () => {
+          if (chrome.runtime.lastError) {
+            const statusEl = shadowRoot.getElementById("kn-ai-status");
+            if (statusEl) statusEl.innerHTML = `<span style="color:#EF4444;">Save failed: ${chrome.runtime.lastError.message}</span>`;
+            return;
+          }
+          showPalette();
+        });
       });
     });
 
     // Load existing settings
     chrome.storage.local.get([
-      'gemini_api_key', 
+      'serverUrl',
+      'claude_api_key',
       'oauth_client_id',
-      'gmail_access_token',
-      'calendar_connected',
+      'google_access_token',
+      'google_connected',
       'slack_webhook_url',
+      'discord_webhook_url',
       'github_token', 
       'github_username', 
-      'notion_token'
+      'notion_token',
+      'linear_api_key'
     ], (result) => {
-      if (result.gemini_api_key) {
-        shadowRoot.getElementById("kn-api-key").value = result.gemini_api_key;
-        shadowRoot.getElementById("kn-ai-status").innerHTML = `<span style="color:#10B981;">Configured</span>`;
+      // Claude API key
+      if (result.claude_api_key) {
+        shadowRoot.getElementById("kn-claude-key").value = result.claude_api_key;
+        shadowRoot.getElementById("kn-ai-status").innerHTML = `<span style="color:#10B981;">Claude configured</span>`;
       } else {
         shadowRoot.getElementById("kn-ai-status").innerHTML = `<span style="color:#F59E0B;">Not configured</span>`;
       }
+      
+      // Server URL
+      if (result.serverUrl) {
+        shadowRoot.getElementById("kn-server-url").value = result.serverUrl;
+      }
+      
+      // Google OAuth
       if (result.oauth_client_id) shadowRoot.getElementById("kn-oauth-client-id").value = result.oauth_client_id;
-      if (result.gmail_access_token) {
-        shadowRoot.getElementById("kn-gmail-status").innerHTML = `<span style="color:#10B981;">Gmail: Connected</span>`;
+      if (result.google_connected && result.google_access_token) {
+        shadowRoot.getElementById("kn-google-status").innerHTML = `<span style="color:#10B981;">Connected! Gmail, Calendar, Docs, Sheets, Drive ready.</span>`;
       }
-      if (result.calendar_connected) {
-        shadowRoot.getElementById("kn-calendar-status").innerHTML = `<span style="color:#10B981;">Calendar: Connected</span>`;
-      }
+      
+      // Webhooks
       if (result.slack_webhook_url) shadowRoot.getElementById("kn-slack-webhook").value = result.slack_webhook_url;
+      if (result.discord_webhook_url) shadowRoot.getElementById("kn-discord-webhook").value = result.discord_webhook_url;
+      
+      // Other integrations
       if (result.github_token) shadowRoot.getElementById("kn-github-token").value = result.github_token;
       if (result.github_username) shadowRoot.getElementById("kn-github-username").value = result.github_username;
       if (result.notion_token) shadowRoot.getElementById("kn-notion-token").value = result.notion_token;
+      if (result.linear_api_key) shadowRoot.getElementById("kn-linear-api-key").value = result.linear_api_key;
     });
   }
 
@@ -2197,8 +3069,22 @@ Return ONLY the formatted standup message.
 
       .kn-form-body { padding: 16px; }
       .kn-form-group { margin-bottom: 14px; }
+      .kn-form-row { display: flex; gap: 12px; margin-bottom: 14px; }
+      .kn-form-row .kn-form-group { margin-bottom: 0; }
+      
+      .kn-sheet-preview { display: flex; flex-direction: column; gap: 10px; }
+      .kn-sheet-row { display: flex; align-items: center; gap: 10px; }
+      .kn-sheet-label { font-size: 12px; font-weight: 500; color: rgba(255,255,255,0.5); min-width: 80px; }
       .kn-label { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.6); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.3px; }
       .kn-ai-label { display: inline-flex; align-items: center; gap: 2px; padding: 2px 6px; border-radius: 4px; background: rgba(139,92,246,0.2); color: #C4B5FD; font-size: 10px; font-weight: 500; text-transform: none; }
+
+      .kn-radio-group { display: flex; gap: 16px; }
+      .kn-radio-label { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; color: rgba(255,255,255,0.8); padding: 8px 16px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2); transition: all 0.2s ease; }
+      .kn-radio-label:hover { background: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.15); }
+      .kn-radio-label:has(input:checked) { background: rgba(139,92,246,0.15); border-color: rgba(139,92,246,0.4); color: #fff; }
+      .kn-radio-label input[type="radio"] { appearance: none; -webkit-appearance: none; width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.3); border-radius: 50%; margin: 0; cursor: pointer; transition: all 0.2s ease; position: relative; }
+      .kn-radio-label input[type="radio"]:checked { border-color: #8B5CF6; background: #8B5CF6; }
+      .kn-radio-label input[type="radio"]:checked::after { content: ""; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 6px; height: 6px; background: #fff; border-radius: 50%; }
 
       .kn-input, .kn-textarea { width: 100%; padding: 10px 14px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.12); background: rgba(0,0,0,0.35); color: #f4f4f5; font-size: 14px; font-family: inherit; outline: none; transition: all 0.2s ease; }
       .kn-input::placeholder, .kn-textarea::placeholder { color: rgba(255,255,255,0.4); }

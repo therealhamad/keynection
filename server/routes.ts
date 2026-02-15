@@ -4,6 +4,8 @@ import { z } from "zod";
 import { storage } from "./storage";
 import { seedDatabase } from "./seed";
 import Anthropic from "@anthropic-ai/sdk";
+import { registerIntegrationRoutes } from "./integrations";
+import { registerReplitConnectorRoutes } from "./replit-connectors";
 
 const anthropic = new Anthropic({
   apiKey: process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY,
@@ -217,6 +219,12 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
   await seedDatabase();
+  
+  // Register all integration routes (Gmail, Calendar, Docs, Sheets, Drive, Linear, Notion, Discord)
+  registerIntegrationRoutes(app);
+  
+  // Register Replit connector routes (uses environment variables from Replit Secrets)
+  registerReplitConnectorRoutes(app);
 
   app.get("/api/integrations", async (_req, res) => {
     try {
